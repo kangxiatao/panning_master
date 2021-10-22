@@ -1,0 +1,18 @@
+{
+  "exp_name": "cifar10_vgg16_GraSP_prune_ratio_98",
+  "network": "vgg",
+  "depth": 16,
+  "dataset": "cifar10",
+  "batch_size": 128,
+  "epoch": "160",
+  "learning_rate": "0.1",
+  "weight_decay": "5e-4",
+  "exception": "-1",
+  "iterations": 1,
+  "normalize": false,
+  "target_ratio": 0.98,
+  "pruner": "GraSP",
+  "pruner_file": "GraSP",
+  "samples_per_class": 10,
+  "ratio_layer": [0.2, 0.1, 0.08, 0.06, 0.06, 0.04, 0.04, 0.02, 0.02, 0.02, 0.02, 0.02, 0.01, 0.2]
+}

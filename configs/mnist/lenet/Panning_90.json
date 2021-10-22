@@ -1,0 +1,17 @@
+{
+  "exp_name": "mnist_lenet_prune_ratio_90",
+  "network": "lenet",
+  "dataset": "mnist",
+  "depth": 5,
+  "batch_size": 256,
+  "epoch": "80",
+  "learning_rate": "0.1",
+  "weight_decay": "1e-3",
+  "exception": "-1",
+  "iterations": 1,
+  "normalize": false,
+  "target_ratio": 0.90,
+  "pruner": "Panning",
+  "pruner_file": "Panning",
+  "samples_per_class": 10
+}
