@@ -267,7 +267,7 @@ def Panning(net, ratio, train_dataloader, device,
             layer_cnt += 1
 
     # ----------------------------------
-    debug = True
+    debug = False
     if debug:
         gra_gl2_sort, _gra_gl2_ind = torch.sort(torch.cat([torch.flatten(x) for x in grads_xq.values()]))
         gra = torch.cat([torch.flatten(x) for x in grads_x.values()])
@@ -332,7 +332,7 @@ def Panning(net, ratio, train_dataloader, device,
     print('** accept: ', acceptable_score__)
 
     for m, g in grads.items():
-        if prune_link:
+        if prune_link or prune_mode == 0:
             keep_masks[m] = torch.ones_like(g).float()
         else:
             keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
@@ -457,27 +457,27 @@ def Panning(net, ratio, train_dataloader, device,
         print(f'_add_mask_num: {_add_mask_num}')
         _get_connected_scores(f"Add", 1)
 
-        # for debug
-        if len(_add_grasp_value) > 0:
-            _mean_ratio = 0
-            _maxr = 0
-            _minr = 1
-            all_scores, _ = torch.sort(all_scores)
-            # norm_factor
-            for _value in _add_grasp_value:
-                _value = torch.mean(_value)
-                _index = int(torch.nonzero(all_scores <= float(_value))[-1])
-                _ratio = _index / len(all_scores)
-                _mean_ratio += _ratio
-                if _ratio > _maxr:
-                    _maxr = _ratio
-                if _ratio < _minr:
-                    _minr = _ratio
-                # print(_ratio*100)
-            print(f"{'-' * 20}\nmean:")
-            print(_mean_ratio / len(_add_grasp_value))
-            print(f'_maxr: {_maxr}')
-            print(f'_minr: {_minr}')
+        # # for debug
+        # if len(_add_grasp_value) > 0:
+        #     _mean_ratio = 0
+        #     _maxr = 0
+        #     _minr = 1
+        #     all_scores, _ = torch.sort(all_scores)
+        #     # norm_factor
+        #     for _value in _add_grasp_value:
+        #         _value = torch.mean(_value)
+        #         _index = int(torch.nonzero(all_scores <= float(_value))[-1])
+        #         _ratio = _index / len(all_scores)
+        #         _mean_ratio += _ratio
+        #         if _ratio > _maxr:
+        #             _maxr = _ratio
+        #         if _ratio < _minr:
+        #             _minr = _ratio
+        #         # print(_ratio*100)
+        #     print(f"{'-' * 20}\nmean:")
+        #     print(_mean_ratio / len(_add_grasp_value))
+        #     print(f'_maxr: {_maxr}')
+        #     print(f'_minr: {_minr}')
 
     # --- 分析卷积核 ---
     debug = False

@@ -213,7 +213,6 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                             prune_link=config.prune_link
                             )
             # print(masks)
-            print('=> Using GraSP')
             # ========== register mask ==================
             mb.register_mask(masks)
             # ========== print pruning details ============

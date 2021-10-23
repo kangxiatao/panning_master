@@ -178,76 +178,18 @@ def Panning(net, ratio, train_dataloader, device,
             q = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
             s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
 
-            # ============== debug ==============
-            debug = True
-            if debug:
-                grads_x[old_modules[idx]] = x
-                grads_q[old_modules[idx]] = q
-                grads_xq[old_modules[idx]] = x + q
-
-                # # 层突触分析
-                # print(torch.mean(x), torch.sum(x))
-                # print(torch.mean(q), torch.sum(q))
-                # # print(torch.mean(p), torch.sum(p))
-                # print('-' * 20)
-                # 排序分析图 49 46 43 40 36 33 30 27 23 20 17 14 10 7 3 0
-                use_layer = 666
-                if layer_cnt == use_layer:
-                    import matplotlib.pyplot as plt
-                    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-                    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-                    plt.figure(1)
-                    # 按两者的和排序
-                    gra_gl2, ind = torch.sort(torch.cat([torch.flatten(x + q)]), descending=True)
-                    gra = torch.cat([torch.flatten(x)])
-                    gl2 = torch.cat([torch.flatten(q)])
-                    np_gra_gl2 = gra_gl2.cpu().detach().numpy()
-                    np_gra = gra[ind].cpu().detach().numpy()
-                    np_gl2 = gl2[ind].cpu().detach().numpy()
-                    zero_ind = np.argwhere(np_gra_gl2 > 0)[-1]
-                    plt.plot(range(1, len(gra) + 1, 1), np_gra_gl2, color='violet', label="Gra+SNIP")
-                    plt.scatter(range(1, len(gra) + 1, 1), np_gra, color='cornflowerblue', s=1, label="Gra")
-                    plt.scatter(range(1, len(gra) + 1, 1), np_gl2, color='rosybrown', s=1, label="SNIP")
-                    plt.axvline(zero_ind, color='green', linestyle=':')
-                    # plt.axvline(len(gra)*0.98, color='darkorchid', linestyle=':')
-                    plt.legend()
-                    plt.show()
-
-                    plt.figure(2)
-                    plt.plot(range(1, len(gra) + 1, 1), np_gra_gl2, color='violet', label="Gra+SNIP")
-                    plt.scatter(range(1, len(gra) + 1, 1), np_gra, color='cornflowerblue', s=1, label="Gra")
-                    # plt.scatter(range(1, len(gra) + 1, 1), np_gl2, color='rosybrown', s=1, label="GL2")
-                    plt.axvline(zero_ind, color='green', linestyle=':')
-                    # plt.axvline(len(gra)*0.98, color='darkorchid', linestyle=':')
-                    plt.legend()
-                    plt.show()
-
-                    plt.figure(3)
-                    plt.plot(range(1, len(gra) + 1, 1), np_gra_gl2, color='violet', label="Gra+SNIP")
-                    # plt.scatter(range(1, len(gra) + 1, 1), np_gra, color='cornflowerblue', s=1, label="Gra")
-                    plt.scatter(range(1, len(gra) + 1, 1), np_gl2, color='rosybrown', s=1, label="SNIP")
-                    plt.axvline(zero_ind, color='green', linestyle=':')
-                    # plt.axvline(len(gra)*0.98, color='darkorchid', linestyle=':')
-                    plt.legend()
-                    plt.show()
-            # ===============================
-
             # snip
             if prune_mode == 1:
                 x = s
-
             # grasp
             if prune_mode == 2:
                 pass
-
             # 添加梯度范数
             if prune_mode == 3:
                 x += q
-
             # 添加SNIP
             if prune_mode == 4:
                 x += s
-
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
                 if isinstance(layer, nn.Conv2d):
@@ -263,49 +205,6 @@ def Panning(net, ratio, train_dataloader, device,
             grads[old_modules[idx]] = x
 
             layer_cnt += 1
-
-    # ----------------------------------
-    debug = True
-    if debug:
-        gra_gl2_sort, _gra_gl2_ind = torch.sort(torch.cat([torch.flatten(x) for x in grads_xq.values()]))
-        gra = torch.cat([torch.flatten(x) for x in grads_x.values()])
-        gl2 = torch.cat([torch.flatten(x) for x in grads_q.values()])
-        gra_sort, _ = torch.sort(gra)
-        gl2_sort, _ = torch.sort(gl2)
-        np_gra_sort = gra_sort.cpu().detach().numpy()
-        np_gl2_sort = gl2_sort.cpu().detach().numpy()
-
-        all_num = len(gra_gl2_sort)
-        remain_index = _gra_gl2_ind[:int(all_num * 0.02)]
-        gra_re_sort, _gra_ind = torch.sort(gra[remain_index])
-        np_gra_re_sort = gra_re_sort.cpu().detach().numpy()
-        gl2_re_sort, _gl2_ind = torch.sort(gl2[remain_index])
-        np_gl2_re_sort = gl2_re_sort.cpu().detach().numpy()
-
-        gra_02_value = np_gra_sort[int(all_num * 0.02)]
-        gra_05_value = np_gra_sort[int(all_num * 0.05)]
-        gra_10_value = np_gra_sort[int(all_num * 0.10)]
-        gl2_02_value = np_gl2_sort[int(all_num * 0.02)]
-        gl2_05_value = np_gl2_sort[int(all_num * 0.05)]
-        gl2_10_value = np_gl2_sort[int(all_num * 0.10)]
-
-        gra_02_ind = np.argwhere(np_gra_re_sort <= gra_02_value)[-1]
-        gra_05_ind = np.argwhere(np_gra_re_sort <= gra_05_value)[-1]
-        gra_10_ind = np.argwhere(np_gra_re_sort <= gra_10_value)[-1]
-        gl2_02_ind = np.argwhere(np_gl2_re_sort <= gl2_02_value)[-1]
-        gl2_05_ind = np.argwhere(np_gl2_re_sort <= gl2_05_value)[-1]
-        gl2_10_ind = np.argwhere(np_gl2_re_sort <= gl2_10_value)[-1]
-
-        print('2%:')
-        print('gra => ', gra_02_ind / (len(np_gra_re_sort)))
-        print('gl2 => ', gl2_02_ind / (len(np_gl2_re_sort)))
-        print('5%:')
-        print('gra => ', gra_05_ind / (len(np_gra_re_sort)))
-        print('gl2 => ', gl2_05_ind / (len(np_gl2_re_sort)))
-        print('10%:')
-        print('gra => ', gra_10_ind / (len(np_gra_re_sort)))
-        print('gl2 => ', gl2_10_ind / (len(np_gl2_re_sort)))
-        print(len(np_gra_re_sort), len(np_gl2_re_sort))
 
     # === 根据重要度确定masks ===
     keep_masks = dict()
@@ -392,8 +291,6 @@ def Panning(net, ratio, train_dataloader, device,
                             top_k = 1
                             _scores, _index = torch.topk(temp, top_k, largest=False)
                             keep_masks[grad_key[_rep_layer]][_index[:top_k], i] = 1
-                            # for debug
-                            _add_grasp_value.append(grads[grad_key[_rep_layer]][_index[:top_k], i, 0, 0] / norm_factor)
 
                     for j in range(_rep_filter.shape[0]):  # 遍历过滤器
                         if _channel[j] != 0 and _rep_filter[j] == 0:
@@ -402,8 +299,6 @@ def Panning(net, ratio, train_dataloader, device,
                             top_k = 1
                             _scores, _index = torch.topk(temp, top_k, largest=False)
                             keep_masks[grad_key[_rep_layer]][j, _index[:top_k]] = 1
-                            # for debug
-                            _add_grasp_value.append(grads[grad_key[_rep_layer]][j, _index[:top_k], 0, 0] / norm_factor)
 
                     # 重新计算
                     _pre_layer = _rep_layer
@@ -428,8 +323,6 @@ def Panning(net, ratio, train_dataloader, device,
                         top_k = 1
                         _scores, _index = torch.topk(temp, top_k, largest=False)
                         keep_masks[grad_key[_rep_layer]][_index[:top_k], i] = 1
-                        # for debug
-                        _add_grasp_value.append(grads[grad_key[_rep_layer]][_index[:top_k], i, 0, 0] / norm_factor)
 
                 for j in range(_rep_filter.shape[0]):  # 遍历过滤器
                     if _linear[j] != 0 and _rep_filter[j] == 0:
@@ -438,54 +331,12 @@ def Panning(net, ratio, train_dataloader, device,
                         top_k = 1
                         _scores, _index = torch.topk(temp, top_k, largest=False)
                         keep_masks[grad_key[_rep_layer]][j, _index[:top_k]] = 1
-                        # for debug
-                        _add_grasp_value.append(grads[grad_key[_rep_layer]][j, _index[:top_k], 0, 0] / norm_factor)
 
         _now_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()]))
         print(f'_now_mask_num: {_now_mask_num}')
         _add_mask_num = _now_mask_num - _pre_mask_num
         print(f'_add_mask_num: {_add_mask_num}')
         _get_connected_scores(f"Add", 1)
-
-        # for debug
-        if len(_add_grasp_value) > 0:
-            _mean_ratio = 0
-            _maxr = 0
-            _minr = 1
-            all_scores, _ = torch.sort(all_scores)
-            # norm_factor
-            for _value in _add_grasp_value:
-                _value = torch.mean(_value)
-                _index = int(torch.nonzero(all_scores <= float(_value))[-1])
-                _ratio = _index / len(all_scores)
-                _mean_ratio += _ratio
-                if _ratio > _maxr:
-                    _maxr = _ratio
-                if _ratio < _minr:
-                    _minr = _ratio
-                # print(_ratio*100)
-            print(f"{'-' * 20}\nmean:")
-            print(_mean_ratio / len(_add_grasp_value))
-            print(f'_maxr: {_maxr}')
-            print(f'_minr: {_minr}')
-
-    # --- 分析卷积核 ---
-    debug = False
-    if debug:
-        _analyse_layer = 11
-        _analyse_weight = keep_masks[grad_key[_analyse_layer]]
-        k1 = _analyse_weight.shape[2]
-        k2 = _analyse_weight.shape[3]
-        _analyse_weight = torch.sum(_analyse_weight, dim=(2, 3), keepdim=True)
-        _analyse_weight = _analyse_weight.repeat(1, 1, k1, k2)
-        # 卷积核取均值
-        # _analyse_weight = torch.div(_analyse_weight, k1 * k2)
-        _conv_zero_num = torch.sum(torch.cat([torch.flatten(_analyse_weight == 0)]))
-        _conv_fail_num = torch.sum(torch.cat([torch.flatten(_analyse_weight <= 1)]))
-        _conv_all_num = _analyse_weight.shape[0] * _analyse_weight.shape[1]
-        print(f'_conv_zero_num: {_conv_zero_num / 9}')
-        print(f'_conv_fail_num: {_conv_fail_num / 9}')
-        print(f'_conv_all_num: {_conv_all_num}')
 
     # 计算核链，并删除
     if prune_link:
@@ -545,23 +396,6 @@ def Panning(net, ratio, train_dataloader, device,
                     _link_all_num = torch.flatten(x)
         _link_all_scores, _link_all_scores_index = torch.sort(_link_all_scores, descending=True)
         _link_all_num = _link_all_num[_link_all_scores_index]
-
-        debug = False
-        if debug:
-            import matplotlib.pyplot as plt
-            plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-            plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-            plt.figure(1)
-            np_link_all_scores = _link_all_scores.cpu().detach().numpy()
-            np_link_all_num = _link_all_num.cpu().detach().numpy()
-            np_link_all_num = np_link_all_num * np_link_all_scores.max() / np_link_all_num.max()
-            # zero_ind = np.argwhere(np_gra_gl2 > 0)[-1]
-            plt.plot(range(1, len(np_link_all_scores) + 1, 1), np_link_all_scores, color='violet', label="scores")
-            plt.scatter(range(1, len(np_link_all_scores) + 1, 1), np_link_all_num, color='rosybrown', s=1, label="num")
-            # plt.axvline(zero_ind, color='green', linestyle=':')
-            # plt.axvline(len(gra)*0.98, color='darkorchid', linestyle=':')
-            plt.legend()
-            plt.show()
 
         # 得到要删除的链数
         _top = 0

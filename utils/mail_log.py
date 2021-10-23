@@ -43,10 +43,22 @@ def get_sentence():
 
 
 def get_words():
-    con = requests.get('http://api.eei8.cn/say/api.php?encode=js')
-    # print(con.content.decode('utf-8'))
-    res = re.findall("document.write\('(.*?)'\);", con.content.decode('utf-8'))
-    print(res[0])
+    res = ['Wubba lubba dub dub', 'haha']
+    try:
+        con = requests.get('http://api.eei8.cn/say/api.php?encode=js')
+        # print(con.content.decode('utf-8'))
+        res = re.findall("document.write\('(.*?)'\);", con.content.decode('utf-8'))
+        print(res[0])
+
+        # con = requests.get('https://v1.hitokoto.cn')
+        # con = requests.get('https://international.v1.hitokoto.cn')
+        # print(con.content.decode('utf-8'))
+        # res = re.findall("\"hitokoto\":\"'(.*?)'\";", con.content.decode('utf-8'))
+        # print(res[0])
+
+    except:
+        print(res[0])
+
     return res[0]
 
 
@@ -61,17 +73,20 @@ class MailLogs:
         self.smtp_server = smtp_server
 
     def sendmail(self, sendstr, fromstr='炼丹炉', header='我能在河边钓一整天的🐟'):
-        msg = MIMEText(sendstr, 'plain', 'utf-8')
-        msg['From'] = _format_addr(fromstr + '<%s>' % self.from_addr)
-        msg['To'] = _format_addr('<%s>' % self.to_addr)
-        msg['Subject'] = Header(header, 'utf-8').encode()
+        try:
+            msg = MIMEText(sendstr, 'plain', 'utf-8')
+            msg['From'] = _format_addr(fromstr + '<%s>' % self.from_addr)
+            msg['To'] = _format_addr('<%s>' % self.to_addr)
+            msg['Subject'] = Header(header, 'utf-8').encode()
 
-        server = smtplib.SMTP_SSL(self.smtp_server, 465)
-        server.ehlo(self.smtp_server)  # linux报错解决
-        # server.set_debuglevel(1)  # 打印出和SMTP服务器交互的所有信息
-        server.login(self.from_addr, self.password)
-        server.sendmail(self.from_addr, [self.to_addr], msg.as_string())
-        server.quit()
+            server = smtplib.SMTP_SSL(self.smtp_server, 465)
+            server.ehlo(self.smtp_server)  # linux报错解决
+            # server.set_debuglevel(1)  # 打印出和SMTP服务器交互的所有信息
+            server.login(self.from_addr, self.password)
+            server.sendmail(self.from_addr, [self.to_addr], msg.as_string())
+            server.quit()
+        except:
+            print(sendstr, fromstr, header)
 
     def set_to(self, to_addr):
         self.to_addr = to_addr

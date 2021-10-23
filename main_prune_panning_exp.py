@@ -30,11 +30,11 @@ from utils import mail_log
 def init_config():
     parser = argparse.ArgumentParser()
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
-    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
-    # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
-    parser.add_argument('--run', type=str, default='exp1')
+    # parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
+    parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
+    parser.add_argument('--run', type=str, default='grasp_cosine')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=2)
+    parser.add_argument('--prune_mode', type=int, default=0)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=1)  # 修剪卷积核标志
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
@@ -122,18 +122,23 @@ def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
                                                             config.depth))
 
 
-def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration):
+def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
     correct = 0
     total = 0
-    loss_grad = 0
 
-    desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-            (lr_scheduler.get_last_lr(), 0, 0, correct, total))
-
-    writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_last_lr(), epoch)
+    desc = None
+    if lr_mode == 'cosine':
+        desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                (lr_scheduler.get_last_lr(), 0, 0, correct, total))
+        writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_last_lr(), epoch)
+    elif lr_mode == 'preset':
+        lr_scheduler(optimizer, epoch)
+        desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                (lr_scheduler.get_lr(optimizer), 0, 0, correct, total))
+        writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_lr(optimizer), epoch)
 
     prog_bar = tqdm(enumerate(loader), total=len(loader), desc=desc, leave=True)
     for batch_idx, (inputs, targets) in prog_bar:
@@ -150,8 +155,12 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (lr_scheduler.get_last_lr(), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+        if lr_mode == 'cosine':
+            desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                    (lr_scheduler.get_last_lr(), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+        elif lr_mode == 'preset':
+            desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                    (lr_scheduler.get_lr(optimizer), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
         prog_bar.set_description(desc, refresh=True)
 
     writer.add_scalar('iter_%d/train/loss' % iteration, train_loss / (batch_idx + 1), epoch)
@@ -234,35 +243,34 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                                prune_link=config.prune_link
                                )
 
-            # 与之前98%比较
-            _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in last_mask.values()]))
-            _and_mask_num = 0
-            _la_cnt = 0
-            for m, g in masks.items():
-                if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-                    and_mask = masks[m] * last_mask[m]
-                    _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
-                    _last_mask_num = torch.sum(torch.cat([torch.flatten(last_mask[m] == 1)]))
-                    print(_la_cnt, '-' * 20)
-                    # print(f'_now_mask_num: {_now_mask_num}')
-                    # print(f'_last_mask_num: {_last_mask_num}')
-                    print(f'/: {1 - _now_mask_num / _last_mask_num}')
-                    _and_mask_num += _now_mask_num
-                    _la_cnt += 1
-            print('all', '-' * 20)
-            # print(f'_all_mask_num: {_all_mask_num}')
-            # print(f'_and_mask_num: {_and_mask_num}')
-            print(f'/: {1 - _and_mask_num / _all_mask_num}')
+            # # 与之前98%比较（筛选占比）
+            # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in last_mask.values()]))
+            # _and_mask_num = 0
+            # _la_cnt = 0
+            # for m, g in masks.items():
+            #     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+            #         and_mask = masks[m] * last_mask[m]
+            #         _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
+            #         _last_mask_num = torch.sum(torch.cat([torch.flatten(last_mask[m] == 1)]))
+            #         print(_la_cnt, '-' * 20)
+            #         # print(f'_now_mask_num: {_now_mask_num}')
+            #         # print(f'_last_mask_num: {_last_mask_num}')
+            #         print(f'/: {1 - _now_mask_num / _last_mask_num}')
+            #         _and_mask_num += _now_mask_num
+            #         _la_cnt += 1
+            # print('all', '-' * 20)
+            # # print(f'_all_mask_num: {_all_mask_num}')
+            # # print(f'_and_mask_num: {_and_mask_num}')
+            # print(f'/: {1 - _and_mask_num / _all_mask_num}')
 
             # print(masks)
-            print('=> Using GraSP')
             # ========== register mask ==================
             mb.register_mask(masks)
             # ========== print pruning details ============
             logger.info('**[%d] Mask and training setting: ' % iteration)
             print_inf = print_mask_information(mb, logger)
 
-        train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer, iteration=iteration)
+        train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer, iteration=iteration, lr_mode=lr_mode)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
         if lr_mode == 'cosine':
             lr_scheduler.step()
@@ -388,22 +396,22 @@ def main(config):
     #                 enlarge=config.enlarge,
     #                 prune_link=config.prune_link
     #                 )
-    # 与95%与98%比较
-    _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_98.values()]))
-    _and_mask_num = 0
-    for m, g in masks.items():
-        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-            and_mask = masks[m] * masks_98[m]
-            _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
-            _last_mask_num = torch.sum(torch.cat([torch.flatten(masks_98[m] == 1)]))
-            print('-' * 20)
-            print(f'_now_mask_num: {_now_mask_num}')
-            print(f'_last_mask_num: {_last_mask_num}')
-            print(f'/: {1 - _now_mask_num / _last_mask_num}')
-            _and_mask_num += _now_mask_num
-    print(f'_all_mask_num: {_all_mask_num}')
-    print(f'_and_mask_num: {_and_mask_num}')
-    print(f'/: {1 - _and_mask_num / _all_mask_num}')
+    # # 与95%与98%比较（筛选占比）
+    # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_98.values()]))
+    # _and_mask_num = 0
+    # for m, g in masks.items():
+    #     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+    #         and_mask = masks[m] * masks_98[m]
+    #         _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
+    #         _last_mask_num = torch.sum(torch.cat([torch.flatten(masks_98[m] == 1)]))
+    #         print('-' * 20)
+    #         print(f'_now_mask_num: {_now_mask_num}')
+    #         print(f'_last_mask_num: {_last_mask_num}')
+    #         print(f'/: {1 - _now_mask_num / _last_mask_num}')
+    #         _and_mask_num += _now_mask_num
+    # print(f'_all_mask_num: {_all_mask_num}')
+    # print(f'_and_mask_num: {_and_mask_num}')
+    # print(f'/: {1 - _and_mask_num / _all_mask_num}')
 
     # ========== register mask ==================
     mb.register_mask(masks)
