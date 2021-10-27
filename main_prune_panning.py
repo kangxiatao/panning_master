@@ -62,6 +62,7 @@ def init_config():
     config.enlarge = True if args.enlarge == 1 else False
     config.prune_link = True if args.prune_link == 1 else False
     config.prune_epoch = args.prune_epoch
+    config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
     config.send_mail_str = (mail_log.get_words() + '\n')
     config.send_mail_str += "=> 我能在河边钓一整天的🐟 <=\n"
