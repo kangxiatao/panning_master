@@ -45,6 +45,7 @@ def init_config():
     parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--lr_mode', type=str, default='cosine', help='cosine or preset')
+    parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
     args = parser.parse_args()
 
     runs = None
@@ -65,6 +66,7 @@ def init_config():
     config.prune_link = True if args.prune_link == 1 else False
     config.prune_epoch = args.prune_epoch
     config.lr_mode = args.lr_mode
+    config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
     config.send_mail_str = (mail_log.get_words() + '\n')
     config.send_mail_str += "=> 我能在河边钓一整天的🐟 <=\n"
@@ -448,7 +450,7 @@ def main(config):
 
     # preprocessing
     # ====================================== get dataloader ======================================
-    trainloader, testloader = get_dataloader(config.dataset, config.batch_size, 256, 4)
+    trainloader, testloader = get_dataloader(config.dataset, config.batch_size, 256, 4, root=config.dp)
     # ====================================== fetch configs ======================================
     ckpt_path = config.checkpoint_dir
     num_iterations = config.iterations
