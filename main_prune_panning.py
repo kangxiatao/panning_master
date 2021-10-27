@@ -42,6 +42,7 @@ def init_config():
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
     parser.add_argument('--remain', type=float, default=666)
+    parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
     args = parser.parse_args()
 
     runs = None
@@ -282,7 +283,7 @@ def main(config):
 
     # preprocessing
     # ====================================== get dataloader ======================================
-    trainloader, testloader = get_dataloader(config.dataset, config.batch_size, 256, 4)
+    trainloader, testloader = get_dataloader(config.dataset, config.batch_size, 256, 4, root=config.dp)
     # ====================================== fetch configs ======================================
     ckpt_path = config.checkpoint_dir
     num_iterations = config.iterations
