@@ -93,8 +93,8 @@ def get_dataloader(dataset, train_batch_size, test_batch_size, num_workers=2, ro
 
     if dataset == 'tiny_imagenet':
         num_workers = 16
-        trainset = torchvision.datasets.ImageFolder(root + '/tiny_imagenet/train', transform=transform_train)
-        testset = torchvision.datasets.ImageFolder(root + '/tiny_imagenet/val', transform=transform_test)
+        trainset = torchvision.datasets.ImageFolder(root + '/tiny-imagenet-200/train', transform=transform_train)
+        testset = torchvision.datasets.ImageFolder(root + '/tiny-imagenet-200/val', transform=transform_test)
 
     assert trainset is not None and testset is not None, 'Error, no dataset %s' % dataset
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=train_batch_size, shuffle=True,
