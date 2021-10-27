@@ -1,5 +1,5 @@
 {
-  "exp_name": "imagenet_resnet50_GraSP_prune_ratio_60",
+  "exp_name": "imagenet_resnet50_prune_ratio_90",
   "network": "resnet50",
   "depth": 50,
   "dataset": "imagenet",
@@ -10,9 +10,9 @@
   "exception": "-1",
   "iterations": 1,
   "normalize": false,
-  "target_ratio": 0.60,
-  "pruner": "GraSP",
-  "pruner_file": "GraSP_ImageNet",
+  "target_ratio": 0.90,
+  "pruner": "Panning",
+  "pruner_file": "Panning_ImageNet",
   "samples_per_class": 1,
   "num_iters": 150,
   "traindir": "/scratch/ssd001/datasets/imagenet/train"

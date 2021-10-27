@@ -1,5 +1,5 @@
 {
-  "exp_name": "tiny_imagenet_resnet32_GraSP_prune_ratio_90",
+  "exp_name": "tiny_imagenet_resnet32_prune_ratio_85",
   "network": "resnet",
   "depth": 32,
   "dataset": "tiny_imagenet",
@@ -10,9 +10,9 @@
   "exception": "-1",
   "iterations": 1,
   "normalize": false,
-  "target_ratio": 0.90,
-  "pruner": "GraSP",
-  "pruner_file": "GraSP",
+  "target_ratio": 0.85,
+  "pruner": "Panning",
+  "pruner_file": "Panning",
   "samples_per_class": 1,
   "num_iters": 10
 }

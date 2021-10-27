@@ -12,9 +12,11 @@ import json
 import math
 import os
 import sys
+import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.autograd as autograd
 
 from models.model_base import ModelBase
 from tensorboardX import SummaryWriter
@@ -23,20 +25,20 @@ from models.base.init_utils import weights_init
 from utils.common_utils import (get_logger, makedirs, process_config, PresetLRScheduler, str_to_list)
 from utils.data_utils import get_dataloader
 from utils.network_utils import get_network
-from pruner.Panning_exp import Panning
+from pruner.Panning_exp import Panning, GraSP_fetch_data
 from utils import mail_log
 
 
 def init_config():
     parser = argparse.ArgumentParser()
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
-    # parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
-    parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
-    parser.add_argument('--run', type=str, default='grasp_cosine')
+    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
+    # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
+    parser.add_argument('--run', type=str, default='exp2')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=0)
+    parser.add_argument('--prune_mode', type=int, default=2)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
-    parser.add_argument('--prune_conv', type=int, default=1)  # 修剪卷积核标志
+    parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
@@ -122,7 +124,7 @@ def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
                                                             config.depth))
 
 
-def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode):
+def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
@@ -134,11 +136,122 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
                 (lr_scheduler.get_last_lr(), 0, 0, correct, total))
         writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_last_lr(), epoch)
-    elif lr_mode == 'preset':
+    elif 'preset' in lr_mode:
         lr_scheduler(optimizer, epoch)
         desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
                 (lr_scheduler.get_lr(optimizer), 0, 0, correct, total))
         writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_lr(optimizer), epoch)
+
+    # ------------- debug ----------------
+    # 分析梯度项一阶二阶的变化
+    # 求二阶不能这样
+    # grad_l2 = 0
+    # for idx, layer in enumerate(net.modules()):
+    #     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+    #         # print(layer.weight.grad.shape)
+    #         grad_l2 += layer.weight.grad.pow(2).sum()
+    # grad_l2.sqrt()
+
+    # 重新计算损失和建图，便于求一阶二阶导
+    weights = []
+    for layer in net.modules():
+        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+            weights.append(layer.weight)
+    for w in weights:
+        w.requires_grad_(True)
+
+    inputs_one = []
+    targets_one = []
+
+    grad_w = None  # 一阶梯度 g
+
+    # 10个类别，每类样本取10个
+    inputs, targets = GraSP_fetch_data(loader, num_classes, 10)
+    N = inputs.shape[0]
+    # 把数据分为前后两个list
+    din = copy.deepcopy(inputs)
+    dtarget = copy.deepcopy(targets)
+    inputs_one.append(din[:N // 2])
+    targets_one.append(dtarget[:N // 2])
+    inputs_one.append(din[N // 2:])
+    targets_one.append(dtarget[N // 2:])
+    inputs = inputs.cuda()
+    targets = targets.cuda()
+
+    outputs = net.forward(inputs[:N // 2])
+    loss = criterion(outputs, targets[:N // 2])
+    grad_w_p = autograd.grad(loss, weights)
+    grad_w = list(grad_w_p)
+
+    outputs = net.forward(inputs[N // 2:])
+    loss = criterion(outputs, targets[N // 2:])
+    grad_w_p = autograd.grad(loss, weights, create_graph=False)
+    for idx in range(len(grad_w)):
+        grad_w[idx] += grad_w_p[idx]
+
+    # 梯度范数的梯度
+    gr_l2 = 0
+    grasp_l2 = 0
+    _grad_hg = None  # 二阶梯度 Hg
+    _grasp_hg = None  # 二阶梯度 Hg
+    lam_q = 1 / len(inputs_one)
+    for it in range(len(inputs_one)):
+        inputs = inputs_one.pop(0).cuda()
+        targets = targets_one.pop(0).cuda()
+        outputs = net.forward(inputs)
+        loss = criterion(outputs, targets)
+
+        # torch.autograd.grad() 对指定参数求导
+        # .torch.autograd.backward() 动态图所有参数的梯度都计算，叠加到 .grad 属性
+        grad_f = autograd.grad(loss, weights, create_graph=True)  # 一阶梯度 g
+        print([torch.mean(g) for g in grad_f])
+        gr_l2 = 0
+        grasp_l2 = 0
+        count = 0
+        for layer in net.modules():
+            if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                grasp_l2 += (grad_w[count].data * grad_f[count]).sum()
+                gr_l2 += (grad_f[count].pow(2).sum()) * lam_q
+                count += 1
+
+        # print(torch.mean(grasp_l2), 2*torch.mean(gr_l2))
+
+        # gr_l2.sqrt()
+        if _grad_hg is None:
+            _grad_hg = autograd.grad(gr_l2, weights, retain_graph=True)
+        else:
+            _grad_hg = [_grad_hg[i] + autograd.grad(gr_l2, weights, retain_graph=True)[i] for i in range(len(_grad_hg))]
+
+        if _grasp_hg is None:
+            _grasp_hg = autograd.grad(grasp_l2, weights, retain_graph=True)
+        else:
+            _grasp_hg = [_grasp_hg[i] + autograd.grad(grasp_l2, weights, retain_graph=True)[i] for i in range(len(_grasp_hg))]
+
+    ghg = 0  # 二阶项
+    for i in range(len(grad_w)):
+        ghg += (grad_w[i]*_grad_hg[i]).sum()
+    # ghg.sqrt()
+
+    # 计算GraSP and GL2 的差值绝对值和
+    _layer_cnt = 0
+    _diff_sum = 0
+    _grasp_mean = 0
+    _grasp_sum = 0
+    for idx, layer in enumerate(net.modules()):
+        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+            x = -layer.weight.data * _grasp_hg[_layer_cnt]  # -theta_q Hg
+            q = -layer.weight.data * _grad_hg[_layer_cnt]  # -theta_q Hg
+            # print(torch.mean(x), torch.sum(x))
+            # print(torch.mean(l), torch.sum(l))
+            # print(torch.mean(x))
+            # print(torch.mean(q))
+            # print('-'*10)
+            _diff_sum += float(torch.sum(torch.abs(x-q)))
+            _grasp_mean += float(torch.mean(x))
+            _grasp_sum += float(torch.sum(x))
+            _layer_cnt += 1
+    # print('-'*20)
+    # ------------------------------
 
     prog_bar = tqdm(enumerate(loader), total=len(loader), desc=desc, leave=True)
     for batch_idx, (inputs, targets) in prog_bar:
@@ -158,7 +271,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         if lr_mode == 'cosine':
             desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
                     (lr_scheduler.get_last_lr(), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
-        elif lr_mode == 'preset':
+        elif 'preset' in lr_mode:
             desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
                     (lr_scheduler.get_lr(optimizer), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
         prog_bar.set_description(desc, refresh=True)
@@ -166,16 +279,11 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     writer.add_scalar('iter_%d/train/loss' % iteration, train_loss / (batch_idx + 1), epoch)
     writer.add_scalar('iter_%d/train/acc' % iteration, 100. * correct / total, epoch)
 
-    # 分析梯度范数变化
-    grad_l2 = 0
-    for idx, layer in enumerate(net.modules()):
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            # print(layer.weight.grad.shape)
-            grad_l2 += layer.weight.grad.pow(2).sum()
-    grad_l2 = torch.sqrt(grad_l2).float()
-
-    # print(loss.grad.cpu().data.numpy())
-    writer.add_scalar('iter_%d/train/grad' % iteration, grad_l2, epoch)
+    writer.add_scalar('iter_%d/train/gg' % iteration, gr_l2, epoch)
+    writer.add_scalar('iter_%d/train/ghg' % iteration, ghg, epoch)
+    writer.add_scalar('iter_%d/train/_diff_sum' % iteration, _diff_sum, epoch)
+    writer.add_scalar('iter_%d/train/_grasp_mean' % iteration, _grasp_mean, epoch)
+    writer.add_scalar('iter_%d/train/_grasp_sum' % iteration, _grasp_sum, epoch)
 
 
 def test(net, loader, criterion, epoch, writer, iteration):
@@ -217,10 +325,15 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
     lr_scheduler = None
     if lr_mode == 'cosine':
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
-    elif lr_mode == 'preset':
-        lr_schedule = {0: learning_rate,
-                       int(num_epochs * 0.5): learning_rate * 0.1,
-                       int(num_epochs * 0.75): learning_rate * 0.01}
+    elif 'preset' in lr_mode:
+        if lr_mode == 'preset_01':
+            lr_schedule = {0: learning_rate * 0.01,
+                           int(num_epochs * 0.5): learning_rate * 0.01,
+                           int(num_epochs * 0.75): learning_rate * 0.01}
+        else:
+            lr_schedule = {0: learning_rate,
+                           int(num_epochs * 0.5): learning_rate * 0.1,
+                           int(num_epochs * 0.75): learning_rate * 0.01}
         lr_scheduler = PresetLRScheduler(lr_schedule)
 
     print_inf = ''
@@ -270,7 +383,8 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             logger.info('**[%d] Mask and training setting: ' % iteration)
             print_inf = print_mask_information(mb, logger)
 
-        train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer, iteration=iteration, lr_mode=lr_mode)
+        train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer,
+              iteration=iteration, lr_mode=lr_mode, num_classes=num_classes)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
         if lr_mode == 'cosine':
             lr_scheduler.step()
