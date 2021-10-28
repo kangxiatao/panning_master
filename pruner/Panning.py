@@ -178,18 +178,6 @@ def Panning(net, ratio, train_dataloader, device,
             q = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
             s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
 
-            # snip
-            if prune_mode == 1:
-                x = s
-            # grasp
-            if prune_mode == 2:
-                pass
-            # 添加梯度范数
-            if prune_mode == 3:
-                x += q
-            # 添加SNIP
-            if prune_mode == 4:
-                x += s
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
                 if isinstance(layer, nn.Conv2d):
@@ -197,9 +185,26 @@ def Panning(net, ratio, train_dataloader, device,
                     k1 = x.shape[2]
                     k2 = x.shape[3]
                     x = torch.sum(x, dim=(2, 3), keepdim=True)
+                    q = torch.sum(q, dim=(2, 3), keepdim=True)
+                    s = torch.sum(s, dim=(2, 3), keepdim=True)
                     x = x.repeat(1, 1, k1, k2)
+                    q = q.repeat(1, 1, k1, k2)
+                    s = s.repeat(1, 1, k1, k2)
                     # 卷积核取均值
                     x = torch.div(x, k1 * k2)
+                    q = torch.div(q, k1 * k2)
+                    s = torch.div(s, k1 * k2)
+
+            if prune_mode == 1:  # snip
+                x = s
+            if prune_mode == 2:  # grasp
+                pass
+            if prune_mode == 3:  # 添加梯度范数
+                x += q
+            if prune_mode == 4:  # 添加SNIP
+                x += s
+            if prune_mode == 5:  # gl2_diff
+                x -= q
 
             # 评估分数
             grads[old_modules[idx]] = x

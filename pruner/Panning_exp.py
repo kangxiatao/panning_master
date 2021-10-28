@@ -173,7 +173,8 @@ def Panning(net, ratio, train_dataloader, device,
     grads_x = dict()  # grasp
     grads_q = dict()  # gl2
     grads_s = dict()  # snip
-    grads_l = dict()  # gl2_ diff
+    # grads_l = dict()  # gl2_ diff
+    grads_d = dict()  # gl2_ diff
     grads_xq = dict()  # grasp + gl2
 
     layer_cnt = 0
@@ -184,7 +185,7 @@ def Panning(net, ratio, train_dataloader, device,
             x = -layer.weight.data * layer.weight.grad  # -theta_q Hg
             q = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
             s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
-            l = -layer.weight.data * grad_w[layer_cnt].pow(2)
+            # l = -layer.weight.data * grad_w[layer_cnt].pow(2)
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -195,16 +196,13 @@ def Panning(net, ratio, train_dataloader, device,
                     x = torch.sum(x, dim=(2, 3), keepdim=True)
                     q = torch.sum(q, dim=(2, 3), keepdim=True)
                     s = torch.sum(s, dim=(2, 3), keepdim=True)
-                    l = torch.sum(l, dim=(2, 3), keepdim=True)
                     x = x.repeat(1, 1, k1, k2)
                     q = q.repeat(1, 1, k1, k2)
                     s = s.repeat(1, 1, k1, k2)
-                    l = l.repeat(1, 1, k1, k2)
                     # 卷积核取均值
                     x = torch.div(x, k1 * k2)
                     q = torch.div(q, k1 * k2)
                     s = torch.div(s, k1 * k2)
-                    l = torch.div(l, k1 * k2)
 
             # ============== debug ==============
             debug = True
@@ -212,7 +210,8 @@ def Panning(net, ratio, train_dataloader, device,
                 grads_x[old_modules[idx]] = x
                 grads_q[old_modules[idx]] = q
                 grads_s[old_modules[idx]] = s
-                grads_l[old_modules[idx]] = l
+                # grads_l[old_modules[idx]] = l
+                grads_d[old_modules[idx]] = x - q
                 grads_xq[old_modules[idx]] = x + q
 
                 # # 层突触分析
@@ -271,7 +270,9 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 4:  # 添加SNIP
                 x += s
             if prune_mode == 5:  # gl2_diff
-                x = l
+                x -= q
+            if prune_mode == 6:  # gl2_diff
+                x = q - x
 
             # 评估分数
             grads[old_modules[idx]] = x
@@ -772,41 +773,41 @@ def Panning(net, ratio, train_dataloader, device,
     # # plt.legend()
     # # plt.show()
 
-    # # 每层分数排序分析（加入snip or other）
-    # import matplotlib.pyplot as plt
-    # plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-    # plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-    # plt.figure(1)
-    #
-    # for _layer, _key in enumerate(grad_key):
-    #     if 5 > _layer > 1:
-    #         # 排序
-    #         gra, ind = torch.sort(torch.cat([torch.flatten(grads_l[grad_key[_layer]])]), descending=True)
-    #         snip = torch.cat([torch.flatten(grads_s[grad_key[_layer]])])
-    #         np_gra = gra.cpu().detach().numpy()
-    #         thre_ind = np.argwhere(np_gra > float(acceptable_score*norm_factor))[-1]
-    #         # np_snip = snip[ind].cpu().detach().numpy()[int(thre_ind):]
-    #         np_snip = snip[ind].cpu().detach().numpy()
-    #         # zero_ind = np.argwhere(np_gra > 0)[-1]
-    #         # ax1 = plt.subplot(4, 4, _layer + 1)
-    #         plt.subplot(4, 4, _layer + 1)
-    #         plt.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
-    #         # plt.scatter(range(len(np_gra) - len(np_snip) + 1, len(np_gra) + 1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
-    #         # ax1.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
-    #         # ax1.axvline(thre_ind, color='green', linestyle=':')
-    #         # ax1.set_ylabel(u"grasp")
-    #         # # 新建一个共享x轴的双胞胎坐标系
-    #         # ax2 = ax1.twinx()
-    #         # ax2.scatter(range(len(np_gra)-len(np_snip)+1, len(np_gra)+1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
-    #         # ax2.scatter(range(1, len(np_snip)+1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
-    #         # ax2.set_ylabel(u"snip")
-    #         # plt.axvline(zero_ind, color='darkorchid', linestyle=':')
-    #         plt.axvline(thre_ind, color='green', linestyle=':')
-    #         plt.legend()
-    #         # h1, l1 = ax1.get_legend_handles_labels()
-    #         # h2, l2 = ax2.get_legend_handles_labels()
-    #         # plt.legend(h1 + h2, l1 + l2, loc='best')
-    # plt.show()
+    # 每层分数排序分析（加入snip or other）
+    import matplotlib.pyplot as plt
+    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+    plt.figure(1)
+
+    for _layer, _key in enumerate(grad_key):
+        if 5 > _layer > 1:
+            # 排序
+            gra, ind = torch.sort(torch.cat([torch.flatten(grads_d[grad_key[_layer]])]), descending=True)
+            snip = torch.cat([torch.flatten(grads_s[grad_key[_layer]])])
+            np_gra = gra.cpu().detach().numpy()
+            thre_ind = np.argwhere(np_gra > float(acceptable_score*norm_factor))[-1]
+            # np_snip = snip[ind].cpu().detach().numpy()[int(thre_ind):]
+            np_snip = snip[ind].cpu().detach().numpy()
+            # zero_ind = np.argwhere(np_gra > 0)[-1]
+            # ax1 = plt.subplot(4, 4, _layer + 1)
+            plt.subplot(4, 4, _layer + 1)
+            plt.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
+            # plt.scatter(range(len(np_gra) - len(np_snip) + 1, len(np_gra) + 1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
+            # ax1.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
+            # ax1.axvline(thre_ind, color='green', linestyle=':')
+            # ax1.set_ylabel(u"grasp")
+            # # 新建一个共享x轴的双胞胎坐标系
+            # ax2 = ax1.twinx()
+            # ax2.scatter(range(len(np_gra)-len(np_snip)+1, len(np_gra)+1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
+            # ax2.scatter(range(1, len(np_snip)+1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
+            # ax2.set_ylabel(u"snip")
+            # plt.axvline(zero_ind, color='darkorchid', linestyle=':')
+            plt.axvline(thre_ind, color='green', linestyle=':')
+            plt.legend()
+            # h1, l1 = ax1.get_legend_handles_labels()
+            # h2, l2 = ax2.get_legend_handles_labels()
+            # plt.legend(h1 + h2, l1 + l2, loc='best')
+    plt.show()
 
     # # 分析核链
     # _cut_core_num = []

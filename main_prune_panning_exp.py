@@ -194,9 +194,14 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         grad_w[idx] += grad_w_p[idx]
 
     # 梯度范数的梯度
+    # 生气了，🤬
+    all_gral2 = 0  # g0 * g1 and g0 * g2
+    all_gl2 = 0  # g1 * g1 and g2 * g2
+    all_g1_g2 = 0  # 2 * g1 * g2
+
     gr_l2 = 0
     grasp_l2 = 0
-    # last_grad_f = 0  # for debug
+    last_grad_f = 0  # for debug
     _grad_hg = None  # 二阶梯度 Hg
     _grasp_hg = None  # 二阶梯度 Hg
     lam_q = 1 / len(inputs_one)
@@ -209,57 +214,59 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         # torch.autograd.grad() 对指定参数求导
         # .torch.autograd.backward() 动态图所有参数的梯度都计算，叠加到 .grad 属性
         grad_f = autograd.grad(loss, weights, create_graph=True)  # 一阶梯度 g
-        print([torch.mean(g) for g in grad_f])
+        # print([torch.mean(g) for g in grad_f])
         gr_l2 = 0
         grasp_l2 = 0
-        # g1_g2 = 0  # for debug
+        g1_g2 = 0  # for debug
         count = 0
         for layer in net.modules():
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
                 grasp_l2 += (grad_w[count].data * grad_f[count]).sum()  # g0 * g1 and g0 * g2
                 gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
-                # if it % 2 == 1:
-                #     g1_g2 += (grad_f[count] * last_grad_f[count]).sum()  # g1 * g2
+                if it % 2 == 1:
+                    g1_g2 += (grad_f[count] * last_grad_f[count]).sum()  # g1 * g2
                 count += 1
 
-        # if it % 2 == 0:
-        #     last_grad_f = grad_f
+        if it % 2 == 0:
+            last_grad_f = grad_f
+        all_gral2 += grasp_l2
+        all_gl2 += gr_l2
         # print(grasp_l2, 2*gr_l2, 2*g1_g2)
 
         # gr_l2.sqrt()
-        if _grad_hg is None:
-            _grad_hg = autograd.grad(gr_l2, weights, retain_graph=True)
-        else:
-            _grad_hg = [_grad_hg[i] + autograd.grad(gr_l2, weights, retain_graph=True)[i] for i in range(len(_grad_hg))]
+        # if _grad_hg is None:
+        #     _grad_hg = autograd.grad(gr_l2, weights, retain_graph=True)
+        # else:
+        #     _grad_hg = [_grad_hg[i] + autograd.grad(gr_l2, weights, retain_graph=True)[i] for i in range(len(_grad_hg))]
+        #
+        # if _grasp_hg is None:
+        #     _grasp_hg = autograd.grad(grasp_l2, weights, retain_graph=True)
+        # else:
+        #     _grasp_hg = [_grasp_hg[i] + autograd.grad(grasp_l2, weights, retain_graph=True)[i] for i in range(len(_grasp_hg))]
 
-        if _grasp_hg is None:
-            _grasp_hg = autograd.grad(grasp_l2, weights, retain_graph=True)
-        else:
-            _grasp_hg = [_grasp_hg[i] + autograd.grad(grasp_l2, weights, retain_graph=True)[i] for i in range(len(_grasp_hg))]
-
-    ghg = 0  # 二阶项
-    for i in range(len(grad_w)):
-        ghg += (grad_w[i]*_grad_hg[i]).sum()
+    # ghg = 0  # 二阶项
+    # for i in range(len(grad_w)):
+    #     ghg += (grad_w[i]*_grad_hg[i]).sum()
     # ghg.sqrt()
 
     # 计算GraSP and GL2 的差值绝对值和
-    _layer_cnt = 0
-    _diff_sum = 0
-    _grasp_mean = 0
-    _grasp_sum = 0
-    for idx, layer in enumerate(net.modules()):
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            x = -layer.weight.data * _grasp_hg[_layer_cnt]  # -theta_q Hg
-            q = -layer.weight.data * _grad_hg[_layer_cnt]  # -theta_q Hg
-            # print(torch.mean(x), torch.sum(x))
-            # print(torch.mean(l), torch.sum(l))
-            # print(torch.mean(x))
-            # print(torch.mean(q))
-            # print('-'*10)
-            _diff_sum += float(torch.sum(torch.abs(x-q)))
-            _grasp_mean += float(torch.mean(x))
-            _grasp_sum += float(torch.sum(x))
-            _layer_cnt += 1
+    # _layer_cnt = 0
+    # _diff_sum = 0
+    # _grasp_mean = 0
+    # _grasp_sum = 0
+    # for idx, layer in enumerate(net.modules()):
+    #     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+    #         x = -layer.weight.data * _grasp_hg[_layer_cnt]  # -theta_q Hg
+    #         q = -layer.weight.data * _grad_hg[_layer_cnt]  # -theta_q Hg
+    #         # print(torch.mean(x), torch.sum(x))
+    #         # print(torch.mean(l), torch.sum(l))
+    #         # print(torch.mean(x))
+    #         # print(torch.mean(q))
+    #         # print('-'*10)
+    #         _diff_sum += float(torch.sum(torch.abs(x-q)))
+    #         _grasp_mean += float(torch.mean(x))
+    #         _grasp_sum += float(torch.sum(x))
+    #         _layer_cnt += 1
     # print('-'*20)
     # ------------------------------
 
@@ -289,11 +296,13 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     writer.add_scalar('iter_%d/train/loss' % iteration, train_loss / (batch_idx + 1), epoch)
     writer.add_scalar('iter_%d/train/acc' % iteration, 100. * correct / total, epoch)
 
-    writer.add_scalar('iter_%d/train/gg' % iteration, gr_l2, epoch)
-    writer.add_scalar('iter_%d/train/ghg' % iteration, ghg, epoch)
-    writer.add_scalar('iter_%d/train/_diff_sum' % iteration, _diff_sum, epoch)
-    writer.add_scalar('iter_%d/train/_grasp_mean' % iteration, _grasp_mean, epoch)
-    writer.add_scalar('iter_%d/train/_grasp_sum' % iteration, _grasp_sum, epoch)
+    writer.add_scalar('iter_%d/train/gral2' % iteration, all_gral2, epoch)
+    writer.add_scalar('iter_%d/train/gl2' % iteration, all_gl2, epoch)
+    writer.add_scalar('iter_%d/train/g1_g2' % iteration, g1_g2, epoch)
+    # writer.add_scalar('iter_%d/train/ghg' % iteration, ghg, epoch)
+    # writer.add_scalar('iter_%d/train/_diff_sum' % iteration, _diff_sum, epoch)
+    # writer.add_scalar('iter_%d/train/_grasp_mean' % iteration, _grasp_mean, epoch)
+    # writer.add_scalar('iter_%d/train/_grasp_sum' % iteration, _grasp_sum, epoch)
 
 
 def test(net, loader, criterion, epoch, writer, iteration):
