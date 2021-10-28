@@ -39,6 +39,7 @@ def init_config():
     parser.add_argument('--prune_mode', type=int, default=2)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
+    parser.add_argument('--prune_conv_pa', type=int, default=0)
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
@@ -61,6 +62,7 @@ def init_config():
     config.prune_mode = args.prune_mode
     config.prune_mode_pa = args.prune_mode_pa
     config.prune_conv = True if args.prune_conv == 1 else False
+    config.prune_conv_pa = True if args.prune_conv_pa == 1 else False
     config.core_link = True if args.core_link == 1 else False
     config.enlarge = True if args.enlarge == 1 else False
     config.prune_link = True if args.prune_link == 1 else False
@@ -194,6 +196,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     # 梯度范数的梯度
     gr_l2 = 0
     grasp_l2 = 0
+    # last_grad_f = 0  # for debug
     _grad_hg = None  # 二阶梯度 Hg
     _grasp_hg = None  # 二阶梯度 Hg
     lam_q = 1 / len(inputs_one)
@@ -209,14 +212,19 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         print([torch.mean(g) for g in grad_f])
         gr_l2 = 0
         grasp_l2 = 0
+        # g1_g2 = 0  # for debug
         count = 0
         for layer in net.modules():
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-                grasp_l2 += (grad_w[count].data * grad_f[count]).sum()
-                gr_l2 += (grad_f[count].pow(2).sum()) * lam_q
+                grasp_l2 += (grad_w[count].data * grad_f[count]).sum()  # g0 * g1 and g0 * g2
+                gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
+                # if it % 2 == 1:
+                #     g1_g2 += (grad_f[count] * last_grad_f[count]).sum()  # g1 * g2
                 count += 1
 
-        # print(torch.mean(grasp_l2), 2*torch.mean(gr_l2))
+        # if it % 2 == 0:
+        #     last_grad_f = grad_f
+        # print(grasp_l2, 2*gr_l2, 2*g1_g2)
 
         # gr_l2.sqrt()
         if _grad_hg is None:
@@ -351,7 +359,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                                num_iters=config.get('num_iters', 1),
                                reinit=False,
                                prune_mode=config.prune_mode_pa,
-                               prune_conv=config.prune_conv,
+                               prune_conv=config.prune_conv_pa,
                                add_link=config.core_link,
                                delete_link=config.core_link,
                                enlarge=config.enlarge,

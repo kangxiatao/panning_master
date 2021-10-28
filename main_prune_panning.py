@@ -12,6 +12,7 @@ import json
 import math
 import os
 import sys
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -30,14 +31,15 @@ from utils import mail_log
 def init_config():
     parser = argparse.ArgumentParser()
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
-    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_99.json')
+    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='exp1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=2)
-    parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
+    parser.add_argument('--prune_mode', type=int, default=3)
+    parser.add_argument('--prune_mode_pa', type=int, default=1)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=1)  # 修剪卷积核标志
-    parser.add_argument('--core_link', type=int, default=1)  # 核链标志
+    parser.add_argument('--prune_conv_pa', type=int, default=0)
+    parser.add_argument('--core_link', type=int, default=0)  # 核链标志
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
@@ -58,6 +60,7 @@ def init_config():
     config.prune_mode = args.prune_mode
     config.prune_mode_pa = args.prune_mode_pa
     config.prune_conv = True if args.prune_conv == 1 else False
+    config.prune_conv_pa = True if args.prune_conv_pa == 1 else False
     config.core_link = True if args.core_link == 1 else False
     config.enlarge = True if args.enlarge == 1 else False
     config.prune_link = True if args.prune_link == 1 else False
@@ -97,6 +100,71 @@ def print_mask_information(mb, logger):
         logger.info('  (%d) %s: Remaining: %.2f%%' % (count, k, v))
         re_str += '  (%d) %.2f%%\n' % (count, v)
         count += 1
+    return re_str
+
+
+def count_FLOPs(mask, logger):
+    logger.info('** Pruned FLOPs:')
+    re_str = '** Pruned FLOPs:\n'
+    total_2d_num = 0
+    pruned_2d_num = 0
+    count = 0
+    for m, g in mask.items():
+        # 按通道或过滤器运算
+        if isinstance(m, nn.Conv2d):
+            # [n, c, k, k]
+            _shape = g.shape
+            n = _shape[0]
+            c = _shape[1]
+            _2d = np.sum(np.abs(g.cpu().detach().numpy()), axis=(2, 3))
+            _channel = np.sum(_2d, axis=0)
+            _filter = np.sum(_2d, axis=1)
+            _ci = np.count_nonzero(_channel == 0)
+            _co = np.count_nonzero(_filter == 0)
+
+            print('channel:', np.count_nonzero(_channel == 0))
+            print('filter:', np.count_nonzero(_filter == 0))
+
+            pruned_FLOPs = (_co * _ci) / (n * c)
+            total_2d_num += n * c
+            pruned_2d_num += _co * _ci
+
+            logger.info('  (%d) %s: %.2f%%' % (count, m, pruned_FLOPs * 100))
+            re_str += '  (%d) %.2f%%\n' % (count, pruned_FLOPs * 100)
+            count += 1
+
+        # 按卷积核运算
+        # if isinstance(m, nn.Conv2d):
+        #     # [n, c, k, k]
+        #     _shape = mask[m].shape
+        #     n = _shape[0]
+        #     c = _shape[1]
+        #     _2d = torch.sum(mask[m], dim=(2, 3))
+        #     _pruned_2d = torch.sum(torch.flatten(_2d == 0))
+        #     pruned_FLOPs = float(_pruned_2d) / (n * c)
+        #     total_2d_num += n * c
+        #     pruned_2d_num += _pruned_2d
+        #
+        #     logger.info('  (%d) %s: %.2f%%' % (count, m, pruned_FLOPs * 100))
+        #     re_str += '  (%d) %.2f%%\n' % (count, pruned_FLOPs * 100)
+        #     count += 1
+
+        # elif isinstance(m, nn.Linear):
+        #     # [c, n]
+        #     c = mask[m].shape[0]
+        #     n = mask[m].shape[1]
+        #     _pruned_w = torch.sum(torch.flatten(mask[m] == 0))
+        #     pruned_FLOPs = float(_pruned_w)/(n*c)
+        #     total_2d_num += n*c
+        #     pruned_2d_num += _pruned_w
+        #
+        #     logger.info('  (%d) %s: %.2f%%' % (count, m, pruned_FLOPs*100))
+        #     re_str += '  (%d) %.2f%%\n' % (count, pruned_FLOPs*100)
+        #     count += 1
+
+    logger.info('=> Overall Pruned FLOPs: %.2f%%' % (pruned_2d_num*100/total_2d_num))
+    re_str += '=> Overall Pruned FLOPs: %.2f%%\n' % (pruned_2d_num*100/total_2d_num)
+
     return re_str
 
 
@@ -208,7 +276,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                             num_iters=config.get('num_iters', 1),
                             reinit=False,
                             prune_mode=config.prune_mode_pa,
-                            prune_conv=config.prune_conv,
+                            prune_conv=config.prune_conv_pa,
                             add_link=config.core_link,
                             delete_link=config.core_link,
                             enlarge=config.enlarge,
@@ -338,6 +406,8 @@ def main(config):
     # ========== print pruning details ============
     print_inf = print_mask_information(mb, logger)
     config.send_mail_str += print_inf
+    # print_inf = count_FLOPs(masks, logger)
+    # config.send_mail_str += print_inf
     logger.info('  LR: %.5f, WD: %.5f, Epochs: %d' %
                 (learning_rates[iteration], weight_decays[iteration], training_epochs[iteration]))
     config.send_mail_str += 'LR: %.5f, WD: %.5f, Epochs: %d, Batch: %d \n' % (
