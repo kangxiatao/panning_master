@@ -205,6 +205,8 @@ def Panning(net, ratio, train_dataloader, device,
                 x += s
             if prune_mode == 5:  # gl2_diff
                 x -= q
+            if prune_mode == 7:  # gl2_diff
+                x = -torch.abs(q - x)
 
             # 评估分数
             grads[old_modules[idx]] = x
