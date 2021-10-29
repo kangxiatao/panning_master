@@ -36,8 +36,8 @@ def init_config():
     parser.add_argument('--run', type=str, default='exp1')
     parser.add_argument('--epoch', type=str, default='666')
     parser.add_argument('--prune_mode', type=int, default=3)
-    parser.add_argument('--prune_mode_pa', type=int, default=1)  # 第二次修剪模式
-    parser.add_argument('--prune_conv', type=int, default=1)  # 修剪卷积核标志
+    parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
+    parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
