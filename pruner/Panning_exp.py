@@ -177,6 +177,8 @@ def Panning(net, ratio, train_dataloader, device,
             3 grasp+gradl2
             4 grasp+snip
             5 gl2_diff
+            6 gl2_diff
+            7 gl2_diff
     """
 
     # === 计算 ===
@@ -394,6 +396,8 @@ def Panning(net, ratio, train_dataloader, device,
         print(f'{info}-{mode}->_connected_scores: {_connected_scores}')
         return _connected_scores
 
+    _get_connected_scores(f"{'-' * 20}\nBefore", 1)
+
     # --- 补全卷积核，保证连通度 ---
     _add_mask_num = 0
     _pre_mask_num = 0
@@ -402,7 +406,7 @@ def Panning(net, ratio, train_dataloader, device,
         # for debug
         _add_grasp_value = []
 
-        _get_connected_scores(f"{'-' * 20}\nBefore", 1)
+        # _get_connected_scores(f"{'-' * 20}\nBefore", 1)
         _pre_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()]))
 
         _pre_layer = 0

@@ -260,6 +260,8 @@ def Panning(net, ratio, train_dataloader, device,
 
         print(f'{info}-{mode}->_connected_scores: {_connected_scores}')
         return _connected_scores
+        
+    _get_connected_scores(f"{'-' * 20}\nBefore", 1)
 
     # --- 补全卷积核，保证连通度 ---
     _add_mask_num = 0
