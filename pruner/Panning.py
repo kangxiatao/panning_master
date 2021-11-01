@@ -122,12 +122,17 @@ def Panning(net, ratio, train_dataloader, device,
     # === 剪枝部分 ===
     """
         prune_mode:
-            
+            1 - 和最大值
+            2 - 和最小值 （分层比较均衡）
+            3 - 绝对值和
+            4 - 和绝对值
+            5 - 依据和得到网络比例，按绝对值和修剪
     """
 
     # === 计算 ===
     layer_cnt = 0
     grads = dict()
+    grads_prune = dict()
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
@@ -144,6 +149,8 @@ def Panning(net, ratio, train_dataloader, device,
                 x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
             if prune_mode == 4:
                 x = -(torch.abs(a + b + c))
+            if prune_mode == 5:
+                x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -158,31 +165,69 @@ def Panning(net, ratio, train_dataloader, device,
 
             # 评估分数
             grads[old_modules[idx]] = x
+            if prune_mode == 5:
+                grads_prune[old_modules[idx]] = -(a + b + c)
 
             layer_cnt += 1
 
     # === 根据重要度确定masks ===
+
     keep_masks = dict()
+    if prune_mode == 5:
+        # 得到剪枝比例
+        ratio_layer = []
+        prune_masks = dict()
+        all_scores = torch.cat([torch.flatten(x) for x in grads_prune.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        print("** norm factor:", norm_factor)
+        all_scores.div_(norm_factor)
+        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
+        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        acceptable_score = threshold[-1]
+        print('** accept: ', acceptable_score)
+        for m, g in grads_prune.items():
+            prune_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+        print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in prune_masks.values()])))
+        for m, g in prune_masks.items():
+            remain_num = torch.sum(torch.flatten(g == 1))
+            delete_num = torch.sum(torch.flatten(g == 0))
+            all_num = remain_num + delete_num
+            ratio = float(remain_num/all_num)
+            print(all_num, ratio)
+            ratio_layer.append(ratio)
 
-    # Gather all scores in a single vector and normalise
-    all_scores = torch.cat([torch.flatten(x) for x in grads.values()])
-    norm_factor = torch.abs(torch.sum(all_scores)) + eps
-    print("** norm factor:", norm_factor)
-    all_scores.div_(norm_factor)
+        # 按比例修剪
+        _cnt = 0
+        for m, g in grads.items():
+            _scores = torch.cat([torch.flatten(g)])
+            _norm_factor = torch.abs(torch.sum(_scores)) + eps
+            _scores.div_(_norm_factor)
+            _num_to_rm = int(len(_scores) * (1 - ratio_layer[_cnt]))
+            _thr, _ = torch.topk(_scores, _num_to_rm, sorted=True)
+            _acce_score = _thr[-1]
+            print('** ({}) accept: '.format(_cnt), _acce_score)
+            keep_masks[m] = ((g / _norm_factor) <= _acce_score).float()
+            _cnt += 1
+    else:
+        # Gather all scores in a single vector and normalise
+        all_scores = torch.cat([torch.flatten(x) for x in grads.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        print("** norm factor:", norm_factor)
+        all_scores.div_(norm_factor)
 
-    num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
-    threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
-    # import pdb; pdb.set_trace()
-    acceptable_score = threshold[-1]
-    print('** accept: ', acceptable_score)
+        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
+        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        # import pdb; pdb.set_trace()
+        acceptable_score = threshold[-1]
+        print('** accept: ', acceptable_score)
 
-    for m, g in grads.items():
-        if prune_link:
-            keep_masks[m] = torch.ones_like(g).float()
-        else:
-            keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+        for m, g in grads.items():
+            if prune_link:
+                keep_masks[m] = torch.ones_like(g).float()
+            else:
+                keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
 
-    print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
+        print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
 
     grad_key = [x for x in grads.keys()]
 
