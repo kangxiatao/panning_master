@@ -88,61 +88,95 @@ def Panning(net, ratio, train_dataloader, device,
     for w in weights:
         w.requires_grad_(True)
 
-    print("gradient => g")
-    samples_per_class = 15
-    inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
-    N = inputs.shape[0]
-    equal_parts = N // 3
-    inputs = inputs.to(device)
-    targets = targets.to(device)
-    outputs = net.forward(inputs[:equal_parts]) / T
-    loss_a = F.cross_entropy(outputs, targets[:equal_parts])
-    grad_a = autograd.grad(loss_a, weights, create_graph=True)
-    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    grad_b = autograd.grad(loss_b, weights, create_graph=True)
-    outputs = net.forward(inputs[2*equal_parts:]) / T
-    loss_c = F.cross_entropy(outputs, targets[2*equal_parts:])
-    grad_c = autograd.grad(loss_c, weights, create_graph=True)
+    for it in range(num_iters):
+        print("(1): Iterations %d/%d." % (it, num_iters))
+        # num_classes 个样本，每类样本取 samples_per_class 个
+        inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
+        N = inputs.shape[0]
+        # 把数据分为前后两个list
+        din = copy.deepcopy(inputs)
+        dtarget = copy.deepcopy(targets)
+        inputs_one.append(din[:N // 2])
+        targets_one.append(dtarget[:N // 2])
+        inputs_one.append(din[N // 2:])
+        targets_one.append(dtarget[N // 2:])
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+        outputs = net.forward(inputs[:N // 2]) / T
+        loss = F.cross_entropy(outputs, targets[:N // 2])
+        grad_w_p = autograd.grad(loss, weights)
+        if grad_w is None:
+            grad_w = list(grad_w_p)
+        else:
+            for idx in range(len(grad_w)):
+                grad_w[idx] += grad_w_p[idx]
 
-    print("gradient of norm gradient =》 Hg")
-    gab = 0
-    gbc = 0
-    gac = 0
-    _layer = 0
-    for layer in net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]), torch.mean(grad_c[_layer]))
-            gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
-            gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
-            gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
-            _layer += 1
-    print(gab, gbc, gac)
-    grad_gab = autograd.grad(gab, weights, create_graph=True)
-    grad_gbc = autograd.grad(gbc, weights, create_graph=True)
-    grad_gac = autograd.grad(gac, weights, create_graph=True)
+        outputs = net.forward(inputs[N // 2:]) / T
+        loss = F.cross_entropy(outputs, targets[N // 2:])
+        grad_w_p = autograd.grad(loss, weights, create_graph=False)
+        if grad_w is None:
+            grad_w = list(grad_w_p)
+        else:
+            for idx in range(len(grad_w)):
+                grad_w[idx] += grad_w_p[idx]
+
+    ret_inputs = []
+    ret_targets = []
+
+    # 梯度范数的梯度
+    grad_l2 = None
+    lam_q = 1 / len(inputs_one)
+    for it in range(len(inputs_one)):
+        print("(2): Iterations %d/%d." % (it, num_iters))
+        inputs = inputs_one.pop(0).to(device)
+        targets = targets_one.pop(0).to(device)
+        ret_inputs.append(inputs)
+        ret_targets.append(targets)
+        outputs = net.forward(inputs) / T
+        loss = F.cross_entropy(outputs, targets)
+
+        gr_l2 = 0
+        # torch.autograd.grad() 对指定参数求导
+        # .torch.autograd.backward() 动态图所有参数的梯度都计算，叠加到 .grad 属性
+        grad_f = autograd.grad(loss, weights, create_graph=True)
+        z = 0
+        count = 0
+        for layer in net.modules():
+            if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                z += (grad_w[count].data * grad_f[count]).sum()
+                gr_l2 += torch.sum(grad_f[count].pow(2)) * lam_q
+                count += 1
+        z.backward(retain_graph=True)
+
+        gr_l2.sqrt()
+        if grad_l2 is None:
+            grad_l2 = autograd.grad(gr_l2, weights, retain_graph=True)
+        else:
+            grad_l2 = [grad_l2[i] + autograd.grad(gr_l2, weights, retain_graph=True)[i] for i in range(len(grad_l2))]
 
     # === 剪枝部分 ===
     """
         prune_mode:
-            
+            1 snip
+            2 grasp
+            3 grasp+gradl2
+            4 grasp+snip
     """
 
     # === 计算 ===
+    # for debug
+    grads_x = dict()
+    grads_q = dict()
+    grads_xq = dict()
+
     layer_cnt = 0
     grads = dict()
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            a = -layer.weight.data * grad_gab[layer_cnt]  # -theta_q grad_l2
-            b = -layer.weight.data * grad_gbc[layer_cnt]  # -theta_q grad_l2
-            c = -layer.weight.data * grad_gac[layer_cnt]  # -theta_q grad_l2
-
-            x = a
-            if prune_mode == 1:
-                x = a + b + c
-            if prune_mode == 2:
-                x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
+            x = -layer.weight.data * layer.weight.grad  # -theta_q Hg
+            q = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
+            s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -151,9 +185,28 @@ def Panning(net, ratio, train_dataloader, device,
                     k1 = x.shape[2]
                     k2 = x.shape[3]
                     x = torch.sum(x, dim=(2, 3), keepdim=True)
+                    q = torch.sum(q, dim=(2, 3), keepdim=True)
+                    s = torch.sum(s, dim=(2, 3), keepdim=True)
                     x = x.repeat(1, 1, k1, k2)
+                    q = q.repeat(1, 1, k1, k2)
+                    s = s.repeat(1, 1, k1, k2)
                     # 卷积核取均值
                     x = torch.div(x, k1 * k2)
+                    q = torch.div(q, k1 * k2)
+                    s = torch.div(s, k1 * k2)
+
+            if prune_mode == 1:  # snip
+                x = s
+            if prune_mode == 2:  # grasp
+                pass
+            if prune_mode == 3:  # 添加梯度范数
+                x += q
+            if prune_mode == 4:  # 添加SNIP
+                x += s
+            if prune_mode == 5:  # gl2_diff
+                x -= q
+            if prune_mode == 7:  # gl2_diff
+                x = -torch.abs(q - x)
 
             # 评估分数
             grads[old_modules[idx]] = x
