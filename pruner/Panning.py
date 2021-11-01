@@ -80,9 +80,6 @@ def Panning(net, ratio, train_dataloader, device,
             # print(layer.weight.shape)
             # print(layer)
 
-    inputs_one = []
-    targets_one = []
-
     # 梯度
     grad_w = None
     for w in weights:
@@ -142,6 +139,8 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 1:
                 x = a + b + c
             if prune_mode == 2:
+                x = -(a + b + c)
+            if prune_mode == 3:
                 x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
 
             if prune_conv:
