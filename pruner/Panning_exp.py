@@ -175,58 +175,56 @@ def Panning(net, ratio, train_dataloader, device,
             1 snip
             2 grasp
             3 grasp+gradl2
-            4 grasp+snip
-            5 gl2_diff
-            6 gl2_diff
-            7 gl2_diff
+            4 gl2_diff
+            5 abs_diff
+            6 ratio_layer
     """
 
     # === 计算 ===
     # for debug
-    grads_x = dict()  # grasp
-    grads_q = dict()  # gl2
+    grads_p = dict()  # grasp
+    grads_l = dict()  # gl2
     grads_s = dict()  # snip
-    # grads_l = dict()  # gl2_ diff
     grads_d = dict()  # gl2_ diff
-    grads_xq = dict()  # grasp + gl2
+    grads_pl = dict()  # grasp + gl2
 
     layer_cnt = 0
     grads = dict()
+    grads_prune = dict()
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            x = -layer.weight.data * layer.weight.grad  # -theta_q Hg
-            q = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
+            p = -layer.weight.data * layer.weight.grad  # -theta_q Hg
+            l = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
             s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
-            # l = -layer.weight.data * grad_w[layer_cnt].pow(2)
             # d = layer.weight.data * grad_diff[layer_cnt]  # theta_q grad_diff  d = x - q
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
                 if isinstance(layer, nn.Conv2d):
                     # (n, c, k, k)
-                    k1 = x.shape[2]
-                    k2 = x.shape[3]
-                    x = torch.sum(x, dim=(2, 3), keepdim=True)
-                    q = torch.sum(q, dim=(2, 3), keepdim=True)
+                    k1 = p.shape[2]
+                    k2 = p.shape[3]
+                    p = torch.sum(p, dim=(2, 3), keepdim=True)
+                    l = torch.sum(l, dim=(2, 3), keepdim=True)
                     s = torch.sum(s, dim=(2, 3), keepdim=True)
-                    x = x.repeat(1, 1, k1, k2)
-                    q = q.repeat(1, 1, k1, k2)
+                    p = p.repeat(1, 1, k1, k2)
+                    l = l.repeat(1, 1, k1, k2)
                     s = s.repeat(1, 1, k1, k2)
                     # 卷积核取均值
-                    x = torch.div(x, k1 * k2)
-                    q = torch.div(q, k1 * k2)
+                    p = torch.div(p, k1 * k2)
+                    l = torch.div(l, k1 * k2)
                     s = torch.div(s, k1 * k2)
 
             # ============== debug ==============
             debug = True
             if debug:
-                grads_x[old_modules[idx]] = x
-                grads_q[old_modules[idx]] = q
+                grads_p[old_modules[idx]] = p
+                grads_l[old_modules[idx]] = l
                 grads_s[old_modules[idx]] = s
                 # grads_l[old_modules[idx]] = l
-                grads_d[old_modules[idx]] = x - q
-                grads_xq[old_modules[idx]] = x + q
+                grads_d[old_modules[idx]] = p - l
+                grads_pl[old_modules[idx]] = p + l
 
                 # # 层突触分析
                 # print(torch.mean(x), torch.sum(x))
@@ -243,9 +241,9 @@ def Panning(net, ratio, train_dataloader, device,
                     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
                     plt.figure(1)
                     # 按两者的和排序
-                    gra_gl2, ind = torch.sort(torch.cat([torch.flatten(x + q)]), descending=True)
-                    gra = torch.cat([torch.flatten(x)])
-                    gl2 = torch.cat([torch.flatten(q)])
+                    gra_gl2, ind = torch.sort(torch.cat([torch.flatten(p + l)]), descending=True)
+                    gra = torch.cat([torch.flatten(p)])
+                    gl2 = torch.cat([torch.flatten(l)])
                     np_gra_gl2 = gra_gl2.cpu().detach().numpy()
                     np_gra = gra[ind].cpu().detach().numpy()
                     np_gl2 = gl2[ind].cpu().detach().numpy()
@@ -277,32 +275,32 @@ def Panning(net, ratio, train_dataloader, device,
                     plt.show()
             # ===============================
 
+            x = p
             if prune_mode == 1:  # snip
                 x = s
             if prune_mode == 2:  # grasp
-                pass
-            if prune_mode == 3:  # 添加梯度范数
-                x += q
-            if prune_mode == 4:  # 添加SNIP
-                x += s
+                x = p
+            if prune_mode == 3:  # grasp+gradl2
+                x = p + l
+            if prune_mode == 4:  # gl2_diff
+                x = p - l
             if prune_mode == 5:  # gl2_diff
-                x -= q
-            if prune_mode == 6:  # gl2_diff
-                x = q - x
-            if prune_mode == 7:  # gl2_diff
-                x = -torch.abs(q - x)
+                x = -torch.abs(l - p)
+            if prune_mode == 6:  # ratio_layer
+                x = -torch.abs(l - p)
 
             # 评估分数
             grads[old_modules[idx]] = x
-
+            if prune_mode == 6:
+                grads_prune[old_modules[idx]] = p + l
             layer_cnt += 1
 
     # ----------------------------------
     debug = False
     if debug:
-        gra_gl2_sort, _gra_gl2_ind = torch.sort(torch.cat([torch.flatten(x) for x in grads_xq.values()]))
-        gra = torch.cat([torch.flatten(x) for x in grads_x.values()])
-        gl2 = torch.cat([torch.flatten(x) for x in grads_q.values()])
+        gra_gl2_sort, _gra_gl2_ind = torch.sort(torch.cat([torch.flatten(x) for x in grads_pl.values()]))
+        gra = torch.cat([torch.flatten(x) for x in grads_p.values()])
+        gl2 = torch.cat([torch.flatten(x) for x in grads_l.values()])
         gra_sort, _ = torch.sort(gra)
         gl2_sort, _ = torch.sort(gl2)
         np_gra_sort = gra_sort.cpu().detach().numpy()
@@ -344,32 +342,68 @@ def Panning(net, ratio, train_dataloader, device,
     keep_masks = dict()
     keep_masks_98 = dict()
 
-    # Gather all scores in a single vector and normalise
-    all_scores = torch.cat([torch.flatten(x) for x in grads.values()])
-    norm_factor = torch.abs(torch.sum(all_scores)) + eps
-    print("** norm factor:", norm_factor)
-    all_scores.div_(norm_factor)
+    if prune_mode == 6:
+        # 得到剪枝比例
+        ratio_layer = []
+        prune_masks = dict()
+        all_scores = torch.cat([torch.flatten(x) for x in grads_prune.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        print("** norm factor:", norm_factor)
+        all_scores.div_(norm_factor)
+        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
+        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        acceptable_score = threshold[-1]
+        print('** accept: ', acceptable_score)
+        for m, g in grads_prune.items():
+            prune_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+        print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in prune_masks.values()])))
+        for m, g in prune_masks.items():
+            remain_num = torch.sum(torch.flatten(g == 1))
+            delete_num = torch.sum(torch.flatten(g == 0))
+            all_num = remain_num + delete_num
+            ratio = float(remain_num) / float(all_num)
+            # print(all_num, remain_num, ratio)
+            ratio_layer.append(ratio)
 
-    num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
-    threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
-    # import pdb; pdb.set_trace()
-    acceptable_score = threshold[-1]
-    print('** accept: ', acceptable_score)
+        # 按比例修剪
+        _cnt = 0
+        for m, g in grads.items():
+            _scores = torch.cat([torch.flatten(g)])
+            _norm_factor = torch.abs(torch.sum(_scores)) + eps
+            _scores.div_(_norm_factor)
+            _num_to_rm = int(len(_scores) * (1 - ratio_layer[_cnt]))
+            _thr, _ = torch.topk(_scores, _num_to_rm, sorted=True)
+            _acce_score = _thr[-1]
+            # print('** ({}) accept: '.format(_cnt), _acce_score)
+            keep_masks[m] = ((g / _norm_factor) <= _acce_score).float()
+            _cnt += 1
+    else:
+        # Gather all scores in a single vector and normalise
+        all_scores = torch.cat([torch.flatten(x) for x in grads.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        print("** norm factor:", norm_factor)
+        all_scores.div_(norm_factor)
 
-    num_params_to_rm__ = int(len(all_scores) * (1 - 0.02))
-    threshold__, _index__ = torch.topk(all_scores, num_params_to_rm__, sorted=True)
-    # import pdb; pdb.set_trace()
-    acceptable_score__ = threshold__[-1]
-    print('** accept: ', acceptable_score__)
+        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
+        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        # import pdb; pdb.set_trace()
+        acceptable_score = threshold[-1]
+        print('** accept: ', acceptable_score)
 
-    for m, g in grads.items():
-        if prune_link or prune_mode == 0:
-            keep_masks[m] = torch.ones_like(g).float()
-        else:
-            keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
-            keep_masks_98[m] = ((g / norm_factor) <= acceptable_score__).float()
+        num_params_to_rm__ = int(len(all_scores) * (1 - 0.02))
+        threshold__, _index__ = torch.topk(all_scores, num_params_to_rm__, sorted=True)
+        # import pdb; pdb.set_trace()
+        acceptable_score__ = threshold__[-1]
+        print('** accept: ', acceptable_score__)
 
-    print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
+        for m, g in grads.items():
+            if prune_link or prune_mode == 0:
+                keep_masks[m] = torch.ones_like(g).float()
+            else:
+                keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+                keep_masks_98[m] = ((g / norm_factor) <= acceptable_score__).float()
+
+        print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
 
     grad_key = [x for x in grads.keys()]
 
@@ -590,30 +624,30 @@ def Panning(net, ratio, train_dataloader, device,
         _link_all_num = None
         _link_all_scores_prop = None
         _link_all_num_prop = None
-        for x in _conv_link_score.values():
-            if x is not None:
+        for p in _conv_link_score.values():
+            if p is not None:
                 if _link_all_scores is not None:
-                    _link_all_scores = torch.cat([_link_all_scores, torch.flatten(x)])
+                    _link_all_scores = torch.cat([_link_all_scores, torch.flatten(p)])
                 else:
-                    _link_all_scores = torch.flatten(x)
-        for x in _conv_link_num.values():
-            if x is not None:
+                    _link_all_scores = torch.flatten(p)
+        for p in _conv_link_num.values():
+            if p is not None:
                 if _link_all_num is not None:
-                    _link_all_num = torch.cat([_link_all_num, torch.flatten(x)])
+                    _link_all_num = torch.cat([_link_all_num, torch.flatten(p)])
                 else:
-                    _link_all_num = torch.flatten(x)
-        for x in _conv_link_score_prop.values():
-            if x is not None:
+                    _link_all_num = torch.flatten(p)
+        for p in _conv_link_score_prop.values():
+            if p is not None:
                 if _link_all_scores_prop is not None:
-                    _link_all_scores_prop = torch.cat([_link_all_scores_prop, torch.flatten(x)])
+                    _link_all_scores_prop = torch.cat([_link_all_scores_prop, torch.flatten(p)])
                 else:
-                    _link_all_scores_prop = torch.flatten(x)
-        for x in _conv_link_num_prop.values():
-            if x is not None:
+                    _link_all_scores_prop = torch.flatten(p)
+        for p in _conv_link_num_prop.values():
+            if p is not None:
                 if _link_all_num_prop is not None:
-                    _link_all_num_prop = torch.cat([_link_all_num_prop, torch.flatten(x)])
+                    _link_all_num_prop = torch.cat([_link_all_num_prop, torch.flatten(p)])
                 else:
-                    _link_all_num_prop = torch.flatten(x)
+                    _link_all_num_prop = torch.flatten(p)
         _link_all_scores, _link_all_scores_index = torch.sort(_link_all_scores, descending=True)
         _link_all_num = _link_all_num[_link_all_scores_index]
         _link_all_scores_prop = _link_all_scores_prop[_link_all_scores_index]
