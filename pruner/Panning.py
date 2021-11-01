@@ -142,6 +142,8 @@ def Panning(net, ratio, train_dataloader, device,
                 x = -(a + b + c)
             if prune_mode == 3:
                 x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
+            if prune_mode == 4:
+                x = -(torch.abs(a + b + c))
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
