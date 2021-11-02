@@ -58,7 +58,7 @@ def count_fc_parameters(net):
 
 
 def Panning(net, ratio, train_dataloader, device,
-            num_classes=10, samples_per_class=25, num_iters=1, T=200, reinit=True,
+            num_classes=10, samples_per_class=15, num_iters=3, T=200, reinit=True,
             prune_mode=3, prune_conv=False, add_link=False, delete_link=False, delete_conv=False, enlarge=False,
             prune_link=True):
     eps = 1e-10
@@ -81,43 +81,86 @@ def Panning(net, ratio, train_dataloader, device,
             # print(layer)
 
     # 梯度
-    grad_w = None
     for w in weights:
         w.requires_grad_(True)
 
-    print("gradient => g")
-    samples_per_class = 15
-    inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
-    N = inputs.shape[0]
-    equal_parts = N // 3
-    inputs = inputs.to(device)
-    targets = targets.to(device)
-    outputs = net.forward(inputs[:equal_parts]) / T
-    loss_a = F.cross_entropy(outputs, targets[:equal_parts])
-    grad_a = autograd.grad(loss_a, weights, create_graph=True)
-    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    grad_b = autograd.grad(loss_b, weights, create_graph=True)
-    outputs = net.forward(inputs[2*equal_parts:]) / T
-    loss_c = F.cross_entropy(outputs, targets[2*equal_parts:])
-    grad_c = autograd.grad(loss_c, weights, create_graph=True)
+    # -------- 这部分为直接求解，显存爆了 --------
+    # print("gradient => g")
+    # samples_per_class = 15
+    # inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
+    # N = inputs.shape[0]
+    # equal_parts = N // 3
+    # inputs = inputs.to(device)
+    # targets = targets.to(device)
+    # outputs = net.forward(inputs[:equal_parts]) / T
+    # loss_a = F.cross_entropy(outputs, targets[:equal_parts])
+    # grad_a = autograd.grad(loss_a, weights, create_graph=True)
+    # outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
+    # loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
+    # grad_b = autograd.grad(loss_b, weights, create_graph=True)
+    # outputs = net.forward(inputs[2*equal_parts:]) / T
+    # loss_c = F.cross_entropy(outputs, targets[2*equal_parts:])
+    # grad_c = autograd.grad(loss_c, weights, create_graph=True)
+    #
+    # print("gradient of norm gradient =》 Hg")
+    # gab = 0
+    # gbc = 0
+    # gac = 0
+    # _layer = 0
+    # for layer in net.modules():
+    #     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+    #         # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]), torch.mean(grad_c[_layer]))
+    #         gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
+    #         gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
+    #         gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
+    #         _layer += 1
+    # print(gab, gbc, gac)
+    # grad_gab = autograd.grad(gab, weights, create_graph=True)
+    # grad_gbc = autograd.grad(gbc, weights, create_graph=True)
+    # grad_gac = autograd.grad(gac, weights, create_graph=True)
 
-    print("gradient of norm gradient =》 Hg")
-    gab = 0
-    gbc = 0
-    gac = 0
-    _layer = 0
-    for layer in net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]), torch.mean(grad_c[_layer]))
-            gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
-            gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
-            gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
-            _layer += 1
-    print(gab, gbc, gac)
-    grad_gab = autograd.grad(gab, weights, create_graph=True)
-    grad_gbc = autograd.grad(gbc, weights, create_graph=True)
-    grad_gac = autograd.grad(gac, weights, create_graph=True)
+    # -------- 优化，经典的时间换内存 --------
+    print("gradient => g and Hg")
+    samples_per_class = 15
+    num_iters = 3  # 三等分
+    equal_parts = samples_per_class // num_iters
+    inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
+    inputs_one = []
+    targets_one = []
+    for i in range(num_iters):
+        inputs_one.append(inputs[equal_parts*i:equal_parts*(i+1)])
+        targets_one.append(targets[equal_parts*i:equal_parts*(i+1)])
+
+    # n等份的差值分数
+    grad_gg = {}
+
+    _cnt = 0
+    for i in range(num_iters):
+        for j in range(i+1, num_iters):
+            print('=> ', i, j)
+            x_a = inputs_one[i].to(device)
+            y_a = targets_one[i].to(device)
+            out_a = net.forward(x_a) / T
+            loss_a = F.cross_entropy(out_a, y_a)
+            grad_a = autograd.grad(loss_a, weights, create_graph=True)
+            x_b = inputs_one[j].to(device)
+            y_b = targets_one[j].to(device)
+            out_b = net.forward(x_b) / T
+            loss_b = F.cross_entropy(out_b, y_b)
+            grad_b = autograd.grad(loss_b, weights, create_graph=True)
+
+            gab = 0
+            _layer = 0
+            for layer in net.modules():
+                if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                    # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]))
+                    gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
+                    _layer += 1
+            print(gab)
+            grad_gg[_cnt] = autograd.grad(gab, weights)
+            _cnt += 1
+    print(torch.mean(grad_gg[0][10]), torch.mean(grad_gg[1][10]), torch.mean(grad_gg[2][10]))
+    # print(grad_gg[0][0].shape)
 
     # === 剪枝部分 ===
     """
@@ -136,9 +179,12 @@ def Panning(net, ratio, train_dataloader, device,
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            a = -layer.weight.data * grad_gab[layer_cnt]  # -theta_q grad_l2
-            b = -layer.weight.data * grad_gbc[layer_cnt]  # -theta_q grad_l2
-            c = -layer.weight.data * grad_gac[layer_cnt]  # -theta_q grad_l2
+            # a = -layer.weight.data * grad_gab[layer_cnt]  # -theta_q grad_l2
+            # b = -layer.weight.data * grad_gbc[layer_cnt]  # -theta_q grad_l2
+            # c = -layer.weight.data * grad_gac[layer_cnt]  # -theta_q grad_l2
+            a = -layer.weight.data * grad_gg[0][layer_cnt]  # -theta_q grad_l2
+            b = -layer.weight.data * grad_gg[1][layer_cnt]  # -theta_q grad_l2
+            c = -layer.weight.data * grad_gg[2][layer_cnt]  # -theta_q grad_l2
 
             x = a
             if prune_mode == 1:
