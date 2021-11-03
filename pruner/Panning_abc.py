@@ -85,81 +85,81 @@ def Panning(net, ratio, train_dataloader, device,
         w.requires_grad_(True)
 
     # -------- 这部分为直接求解，显存爆了 --------
-    # print("gradient => g")
-    # samples_per_class = 15
-    # inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
-    # N = inputs.shape[0]
-    # equal_parts = N // 3
-    # inputs = inputs.to(device)
-    # targets = targets.to(device)
-    # outputs = net.forward(inputs[:equal_parts]) / T
-    # loss_a = F.cross_entropy(outputs, targets[:equal_parts])
-    # grad_a = autograd.grad(loss_a, weights, create_graph=True)
-    # outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    # loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    # grad_b = autograd.grad(loss_b, weights, create_graph=True)
-    # outputs = net.forward(inputs[2*equal_parts:]) / T
-    # loss_c = F.cross_entropy(outputs, targets[2*equal_parts:])
-    # grad_c = autograd.grad(loss_c, weights, create_graph=True)
-    #
-    # print("gradient of norm gradient =》 Hg")
-    # gab = 0
-    # gbc = 0
-    # gac = 0
-    # _layer = 0
-    # for layer in net.modules():
-    #     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-    #         # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]), torch.mean(grad_c[_layer]))
-    #         gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
-    #         gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
-    #         gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
-    #         _layer += 1
-    # print(gab, gbc, gac)
-    # grad_gab = autograd.grad(gab, weights, create_graph=True)
-    # grad_gbc = autograd.grad(gbc, weights, create_graph=True)
-    # grad_gac = autograd.grad(gac, weights, create_graph=True)
-
-    # -------- 优化，经典的时间换内存 --------
-    print("gradient => g and Hg")
+    print("gradient => g")
     samples_per_class = 15
-    num_iters = 3  # 三等分
-    equal_parts = samples_per_class // num_iters
     inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
-    inputs_one = []
-    targets_one = []
-    for i in range(num_iters):
-        inputs_one.append(inputs[equal_parts*i:equal_parts*(i+1)])
-        targets_one.append(targets[equal_parts*i:equal_parts*(i+1)])
+    N = inputs.shape[0]
+    equal_parts = N // 3
+    inputs = inputs.to(device)
+    targets = targets.to(device)
+    outputs = net.forward(inputs[:equal_parts]) / T
+    loss_a = F.cross_entropy(outputs, targets[:equal_parts])
+    grad_a = autograd.grad(loss_a, weights, create_graph=True)
+    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
+    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
+    grad_b = autograd.grad(loss_b, weights, create_graph=True)
+    outputs = net.forward(inputs[2*equal_parts:]) / T
+    loss_c = F.cross_entropy(outputs, targets[2*equal_parts:])
+    grad_c = autograd.grad(loss_c, weights, create_graph=True)
 
-    # n等份的差值分数
-    grad_gg = {}
+    print("gradient of norm gradient =》 Hg")
+    gab = 0
+    gbc = 0
+    gac = 0
+    _layer = 0
+    for layer in net.modules():
+        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+            # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]), torch.mean(grad_c[_layer]))
+            gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
+            gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
+            gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
+            _layer += 1
+    print(gab, gbc, gac)
+    grad_gab = autograd.grad(gab, weights, retain_graph=True)
+    grad_gbc = autograd.grad(gbc, weights, retain_graph=True)
+    grad_gac = autograd.grad(gac, weights)
 
-    _cnt = 0
-    for i in range(num_iters):
-        for j in range(i+1, num_iters):
-            print('=> ', i, j)
-            x_a = inputs_one[i].to(device)
-            y_a = targets_one[i].to(device)
-            out_a = net.forward(x_a) / T
-            loss_a = F.cross_entropy(out_a, y_a)
-            grad_a = autograd.grad(loss_a, weights, create_graph=True)
-            x_b = inputs_one[j].to(device)
-            y_b = targets_one[j].to(device)
-            out_b = net.forward(x_b) / T
-            loss_b = F.cross_entropy(out_b, y_b)
-            grad_b = autograd.grad(loss_b, weights, create_graph=True)
+    # -------- 优化，经典的时间换内存，但是有bug，🤮 --------
+    # print("gradient => g and Hg")
+    # samples_per_class = 15
+    # num_iters = 3  # 三等分
+    # equal_parts = samples_per_class // num_iters
+    # inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
+    # inputs_one = []
+    # targets_one = []
+    # for i in range(num_iters):
+    #     inputs_one.append(inputs[equal_parts*i:equal_parts*(i+1)])
+    #     targets_one.append(targets[equal_parts*i:equal_parts*(i+1)])
+    #
+    # # n等份的差值分数
+    # grad_gg = {}
 
-            gab = 0
-            _layer = 0
-            for layer in net.modules():
-                if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-                    # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]))
-                    gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
-                    _layer += 1
-            print(gab)
-            grad_gg[_cnt] = autograd.grad(gab, weights)
-            _cnt += 1
-    print(torch.mean(grad_gg[0][10]), torch.mean(grad_gg[1][10]), torch.mean(grad_gg[2][10]))
+    # _cnt = 0
+    # for i in range(num_iters):
+    #     for j in range(i+1, num_iters):
+    #         print('=> ', i, j)
+    #         x_a = inputs_one[i].to(device)
+    #         y_a = targets_one[i].to(device)
+    #         out_a = net.forward(x_a) / T
+    #         loss_a = F.cross_entropy(out_a, y_a)
+    #         grad_a = autograd.grad(loss_a, weights, create_graph=True)
+    #         x_b = inputs_one[j].to(device)
+    #         y_b = targets_one[j].to(device)
+    #         out_b = net.forward(x_b) / T
+    #         loss_b = F.cross_entropy(out_b, y_b)
+    #         grad_b = autograd.grad(loss_b, weights, create_graph=True)
+    #
+    #         gab = 0
+    #         _layer = 0
+    #         for layer in net.modules():
+    #             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+    #                 # print(torch.mean(grad_a[_layer]), torch.mean(grad_b[_layer]))
+    #                 gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
+    #                 _layer += 1
+    #         print(gab)
+    #         grad_gg[_cnt] = autograd.grad(gab, weights)
+    #         _cnt += 1
+    # print(torch.mean(grad_gg[0][10]), torch.mean(grad_gg[1][10]), torch.mean(grad_gg[2][10]))
     # print(grad_gg[0][0].shape)
 
     # === 剪枝部分 ===
@@ -170,21 +170,27 @@ def Panning(net, ratio, train_dataloader, device,
             3 - 绝对值和
             4 - 和绝对值
             5 - 依据和得到网络比例，按绝对值和修剪
+            6 - 取一组的绝对值
     """
 
-    # === 计算 ===
+    # === 计算分值 ===
     layer_cnt = 0
     grads = dict()
+    # --- for debug ---
+    grads_a = dict()
+    grads_b = dict()
+    grads_c = dict()
+    # -----------------
     grads_prune = dict()
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            # a = -layer.weight.data * grad_gab[layer_cnt]  # -theta_q grad_l2
-            # b = -layer.weight.data * grad_gbc[layer_cnt]  # -theta_q grad_l2
-            # c = -layer.weight.data * grad_gac[layer_cnt]  # -theta_q grad_l2
-            a = -layer.weight.data * grad_gg[0][layer_cnt]  # -theta_q grad_l2
-            b = -layer.weight.data * grad_gg[1][layer_cnt]  # -theta_q grad_l2
-            c = -layer.weight.data * grad_gg[2][layer_cnt]  # -theta_q grad_l2
+            a = layer.weight.data * grad_gab[layer_cnt]  # theta_q grad_l2
+            b = layer.weight.data * grad_gbc[layer_cnt]  # theta_q grad_l2
+            c = layer.weight.data * grad_gac[layer_cnt]  # theta_q grad_l2
+            # a = layer.weight.data * grad_gg[0][layer_cnt]  # theta_q grad_l2
+            # b = layer.weight.data * grad_gg[1][layer_cnt]  # theta_q grad_l2
+            # c = layer.weight.data * grad_gg[2][layer_cnt]  # theta_q grad_l2
 
             x = a
             if prune_mode == 1:
@@ -192,11 +198,13 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 2:
                 x = -(a + b + c)
             if prune_mode == 3:
-                x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
+                x = torch.abs(a) + torch.abs(b) + torch.abs(c)
             if prune_mode == 4:
-                x = -(torch.abs(a + b + c))
+                x = torch.abs(a + b + c)
             if prune_mode == 5:
-                x = -(torch.abs(a) + torch.abs(b) + torch.abs(c))
+                x = torch.abs(a) + torch.abs(b) + torch.abs(c)
+            if prune_mode == 6:
+                x = torch.abs(a)
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -211,13 +219,17 @@ def Panning(net, ratio, train_dataloader, device,
 
             # 评估分数
             grads[old_modules[idx]] = x
+            # --- for debug ---
+            grads_a[old_modules[idx]] = torch.abs(a)
+            grads_b[old_modules[idx]] = torch.abs(b)
+            grads_c[old_modules[idx]] = torch.abs(c)
+            # -----------------
             if prune_mode == 5:
                 grads_prune[old_modules[idx]] = -(a + b + c)
 
             layer_cnt += 1
 
     # === 根据重要度确定masks ===
-
     keep_masks = dict()
     if prune_mode == 5:
         # 得到剪枝比例
@@ -227,18 +239,18 @@ def Panning(net, ratio, train_dataloader, device,
         norm_factor = torch.abs(torch.sum(all_scores)) + eps
         print("** norm factor:", norm_factor)
         all_scores.div_(norm_factor)
-        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
-        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
         acceptable_score = threshold[-1]
         print('** accept: ', acceptable_score)
         for m, g in grads_prune.items():
-            prune_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+            prune_masks[m] = ((g / norm_factor) >= acceptable_score).float()
         print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in prune_masks.values()])))
         for m, g in prune_masks.items():
             remain_num = torch.sum(torch.flatten(g == 1))
             delete_num = torch.sum(torch.flatten(g == 0))
             all_num = remain_num + delete_num
-            ratio = float(remain_num/all_num)
+            ratio = float(remain_num) / float(all_num)
             # print(all_num, remain_num, ratio)
             ratio_layer.append(ratio)
 
@@ -248,11 +260,11 @@ def Panning(net, ratio, train_dataloader, device,
             _scores = torch.cat([torch.flatten(g)])
             _norm_factor = torch.abs(torch.sum(_scores)) + eps
             _scores.div_(_norm_factor)
-            _num_to_rm = int(len(_scores) * (1 - ratio_layer[_cnt]))
+            _num_to_rm = int(len(_scores) * ratio_layer[_cnt])
             _thr, _ = torch.topk(_scores, _num_to_rm, sorted=True)
             _acce_score = _thr[-1]
             # print('** ({}) accept: '.format(_cnt), _acce_score)
-            keep_masks[m] = ((g / _norm_factor) <= _acce_score).float()
+            keep_masks[m] = ((g / _norm_factor) >= _acce_score).float()
             _cnt += 1
     else:
         # Gather all scores in a single vector and normalise
@@ -261,8 +273,8 @@ def Panning(net, ratio, train_dataloader, device,
         print("** norm factor:", norm_factor)
         all_scores.div_(norm_factor)
 
-        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
-        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
         # import pdb; pdb.set_trace()
         acceptable_score = threshold[-1]
         print('** accept: ', acceptable_score)
@@ -271,7 +283,7 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_link:
                 keep_masks[m] = torch.ones_like(g).float()
             else:
-                keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+                keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
 
         print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
 
@@ -498,5 +510,116 @@ def Panning(net, ratio, train_dataloader, device,
         _now_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()]))
         print(f'_now_mask_num: {_now_mask_num}')
         _get_connected_scores(f"Del", 1)
+
+    # ============== debug ==============
+    debug = False
+    if debug:
+        # 得到剪枝比例
+        ratio_layer_a = []
+        ratio_layer_b = []
+        ratio_layer_c = []
+        prune_a = dict()
+        prune_b = dict()
+        prune_c = dict()
+
+        all_scores = torch.cat([torch.flatten(x) for x in grads_a.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        all_scores.div_(norm_factor)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
+        acceptable_score = threshold[-1]
+        for m, g in grads_a.items():
+            prune_a[m] = ((g / norm_factor) >= acceptable_score).float()
+        for m, g in prune_a.items():
+            remain_num = torch.sum(torch.flatten(g == 1))
+            delete_num = torch.sum(torch.flatten(g == 0))
+            all_num = remain_num + delete_num
+            ratio = float(remain_num) / float(all_num)
+            ratio_layer_a.append(ratio)
+
+        all_scores = torch.cat([torch.flatten(x) for x in grads_b.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        all_scores.div_(norm_factor)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
+        acceptable_score = threshold[-1]
+        for m, g in grads_b.items():
+            prune_b[m] = ((g / norm_factor) >= acceptable_score).float()
+        for m, g in prune_b.items():
+            remain_num = torch.sum(torch.flatten(g == 1))
+            delete_num = torch.sum(torch.flatten(g == 0))
+            all_num = remain_num + delete_num
+            ratio = float(remain_num) / float(all_num)
+            ratio_layer_b.append(ratio)
+
+        all_scores = torch.cat([torch.flatten(x) for x in grads_c.values()])
+        norm_factor = torch.abs(torch.sum(all_scores)) + eps
+        all_scores.div_(norm_factor)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
+        acceptable_score = threshold[-1]
+        for m, g in grads_c.items():
+            prune_c[m] = ((g / norm_factor) >= acceptable_score).float()
+        for m, g in prune_c.items():
+            remain_num = torch.sum(torch.flatten(g == 1))
+            delete_num = torch.sum(torch.flatten(g == 0))
+            all_num = remain_num + delete_num
+            ratio = float(remain_num) / float(all_num)
+            ratio_layer_c.append(ratio)
+        print(ratio_layer_a)
+        print(ratio_layer_b)
+        print(ratio_layer_c)
+
+        user_layer = 3  # 41.75%
+        # user_layer = 0
+        for _layer, _key in enumerate(grad_key):
+            if _layer == user_layer:
+                import matplotlib.pyplot as plt
+                from matplotlib import cm
+                from mpl_toolkits.mplot3d import Axes3D  # 空间三维画图
+
+                plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+                plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+
+                fig = plt.figure()
+                ax = fig.add_subplot(111, projection='3d')
+
+                # 分值转numpy
+                _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
+                _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
+                _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
+                _np_x = _xa.cpu().detach().numpy()
+                _np_y = _yb.cpu().detach().numpy()
+                _np_z = _zc.cpu().detach().numpy()
+                # 画出全部点
+                # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='ivory', s=1, alpha=0.3, marker='.')
+                # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='black', s=1, alpha=0.3, marker='.')
+
+                # 取出剪枝保留的权重分值
+                _g_len = len(_np_x)
+                _pr_index_a = np.argsort(_np_x)[int(_g_len*ratio_layer_a[user_layer]):]
+                _np_pr_ax = _np_x[_pr_index_a]
+                _np_pr_ay = _np_y[_pr_index_a]
+                _np_pr_az = _np_z[_pr_index_a]
+                _pr_index_b = np.argsort(_np_y)[int(_g_len*ratio_layer_b[user_layer]):]
+                _np_pr_bx = _np_x[_pr_index_b]
+                _np_pr_by = _np_y[_pr_index_b]
+                _np_pr_bz = _np_z[_pr_index_b]
+                _pr_index_c = np.argsort(_np_z)[int(_g_len*ratio_layer_c[user_layer]):]
+                _np_pr_cx = _np_x[_pr_index_c]
+                _np_pr_cy = _np_y[_pr_index_c]
+                _np_pr_cz = _np_z[_pr_index_c]
+                # # 画出保留点
+                ax.scatter(xs=_np_pr_ax, ys=_np_pr_ay, zs=_np_pr_az, c='gold', s=1, alpha=0.3, marker='o')
+                ax.scatter(xs=_np_pr_bx, ys=_np_pr_by, zs=_np_pr_bz, c='mediumvioletred', s=1, alpha=0.3, marker='+')
+                ax.scatter(xs=_np_pr_cx, ys=_np_pr_cy, zs=_np_pr_cz, c='skyblue', s=1, alpha=0.3, marker='*')
+
+                # _lim = np.mean(_np_x) * 5
+                # ax.set_xlim([0, _lim])
+                # ax.set_ylim([0, _lim])
+                # ax.set_zlim([0, _lim])
+                plt.show()
+
+    # =====================================
 
     return keep_masks
