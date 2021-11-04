@@ -177,9 +177,9 @@ def Panning(net, ratio, train_dataloader, device,
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            p = -layer.weight.data * layer.weight.grad  # -theta_q Hg
-            l = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
-            s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
+            p = layer.weight.data * layer.weight.grad  # theta_q Hg
+            l = layer.weight.data * grad_l2[layer_cnt]  # theta_q grad_l2
+            s = torch.abs(layer.weight.data * grad_w[layer_cnt])  # theta_q grad_w
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -208,9 +208,11 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 4:  # gl2_diff
                 x = p - l
             if prune_mode == 5:  # gl2_diff
-                x = -torch.abs(l - p)
+                x = torch.abs(l - p)
             if prune_mode == 6:  # ratio_layer
-                x = -torch.abs(l - p)
+                x = torch.abs(l - p)
+            if prune_mode == 7:  # abs_gra
+                x = torch.abs(p)
 
             # 评估分数
             grads[old_modules[idx]] = x
@@ -229,12 +231,12 @@ def Panning(net, ratio, train_dataloader, device,
         norm_factor = torch.abs(torch.sum(all_scores)) + eps
         print("** norm factor:", norm_factor)
         all_scores.div_(norm_factor)
-        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
-        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
         acceptable_score = threshold[-1]
         print('** accept: ', acceptable_score)
         for m, g in grads_prune.items():
-            prune_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+            prune_masks[m] = ((g / norm_factor) >= acceptable_score).float()
         print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in prune_masks.values()])))
         for m, g in prune_masks.items():
             remain_num = torch.sum(torch.flatten(g == 1))
@@ -250,11 +252,11 @@ def Panning(net, ratio, train_dataloader, device,
             _scores = torch.cat([torch.flatten(g)])
             _norm_factor = torch.abs(torch.sum(_scores)) + eps
             _scores.div_(_norm_factor)
-            _num_to_rm = int(len(_scores) * (1 - ratio_layer[_cnt]))
+            _num_to_rm = int(len(_scores) * ratio_layer[_cnt])
             _thr, _ = torch.topk(_scores, _num_to_rm, sorted=True)
             _acce_score = _thr[-1]
             # print('** ({}) accept: '.format(_cnt), _acce_score)
-            keep_masks[m] = ((g / _norm_factor) <= _acce_score).float()
+            keep_masks[m] = ((g / _norm_factor) >= _acce_score).float()
             _cnt += 1
     else:
         # Gather all scores in a single vector and normalise
@@ -263,8 +265,8 @@ def Panning(net, ratio, train_dataloader, device,
         print("** norm factor:", norm_factor)
         all_scores.div_(norm_factor)
 
-        num_params_to_rm = int(len(all_scores) * (1 - keep_ratio))
-        threshold, _index = torch.topk(all_scores, num_params_to_rm, sorted=True)
+        num_params_to_rm = int(len(all_scores) * keep_ratio)
+        threshold, _index = torch.topk(all_scores, num_params_to_rm)
         # import pdb; pdb.set_trace()
         acceptable_score = threshold[-1]
         print('** accept: ', acceptable_score)
@@ -273,7 +275,7 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_link:
                 keep_masks[m] = torch.ones_like(g).float()
             else:
-                keep_masks[m] = ((g / norm_factor) <= acceptable_score).float()
+                keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
 
         print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
 
@@ -444,7 +446,7 @@ def Panning(net, ratio, train_dataloader, device,
                     _link_all_num = torch.cat([_link_all_num, torch.flatten(x)])
                 else:
                     _link_all_num = torch.flatten(x)
-        _link_all_scores, _link_all_scores_index = torch.sort(_link_all_scores, descending=True)
+        _link_all_scores, _link_all_scores_index = torch.sort(_link_all_scores)
         _link_all_num = _link_all_num[_link_all_scores_index]
 
         # 得到要删除的链数
@@ -456,7 +458,7 @@ def Panning(net, ratio, train_dataloader, device,
                 _top = _cnt
                 break
 
-        _threshold = _link_all_scores[_top]
+        _threshold = _link_all_scores[-_top]
         print(f'_top: {_top}')
         print(f'_threshold: {_threshold}')
 
@@ -465,14 +467,14 @@ def Panning(net, ratio, train_dataloader, device,
             if isinstance(_key, nn.Conv2d) and 'padding' in str(_key):  # 不考虑resnet的shortcut部分
                 if _layer >= 1:
                     for _ch, _link_s in enumerate(_conv_link_score[_key]):
-                        if _link_s > _threshold:
+                        if _link_s < _threshold:
                             keep_masks[grad_key[_layer]][:, _ch] = 0
                             keep_masks[grad_key[_pre_layer]][_ch, :] = 0
                     _pre_layer = _layer
             # 单独考虑线性层
             elif isinstance(_key, nn.Linear):
                 for _ch, _link_s in enumerate(_conv_link_score[_key]):
-                    if _link_s > _threshold:
+                    if _link_s < _threshold:
                         keep_masks[grad_key[_layer]][:, _ch] = 0
                         keep_masks[grad_key[_pre_layer]][_ch, :] = 0
 
