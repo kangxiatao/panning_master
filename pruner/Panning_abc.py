@@ -106,6 +106,8 @@ def Panning(net, ratio, train_dataloader, device,
     gab = 0
     gbc = 0
     gac = 0
+    gaba = 0
+    gabb = 0
     _layer = 0
     for layer in net.modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
@@ -113,11 +115,15 @@ def Panning(net, ratio, train_dataloader, device,
             gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
             gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
             gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
+            gaba += ((grad_a[_layer]+grad_b[_layer]) * grad_a[_layer]).sum()  # gab * ga
+            gabb += ((grad_a[_layer]+grad_b[_layer]) * grad_b[_layer]).sum()  # gab * gb
             _layer += 1
     print(gab, gbc, gac)
     grad_gab = autograd.grad(gab, weights, retain_graph=True)
     grad_gbc = autograd.grad(gbc, weights, retain_graph=True)
-    grad_gac = autograd.grad(gac, weights)
+    grad_gac = autograd.grad(gac, weights, retain_graph=True)
+    grad_gaba = autograd.grad(gaba, weights, retain_graph=True)
+    grad_gabb = autograd.grad(gabb, weights, retain_graph=True)
 
     # -------- 优化，经典的时间换内存，但是有bug，🤮 --------
     # print("gradient => g and Hg")
@@ -205,6 +211,10 @@ def Panning(net, ratio, train_dataloader, device,
                 x = torch.abs(a) + torch.abs(b) + torch.abs(c)
             if prune_mode == 6:
                 x = torch.abs(a)
+            if prune_mode == 7:
+                x = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
+            if prune_mode == 8:
+                x = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -588,12 +598,13 @@ def Panning(net, ratio, train_dataloader, device,
                 _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
                 _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
                 _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
-                _np_x = _xa.cpu().detach().numpy()
-                _np_y = _yb.cpu().detach().numpy()
-                _np_z = _zc.cpu().detach().numpy()
+                _np_x = np.log(_xa.cpu().detach().numpy())
+                _np_y = np.log(_yb.cpu().detach().numpy())
+                _np_z = np.log(_zc.cpu().detach().numpy())
                 # 画出全部点
                 # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='ivory', s=1, alpha=0.3, marker='.')
                 # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='black', s=1, alpha=0.3, marker='.')
+                ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='coral', s=1, alpha=0.3, marker='.')
 
                 # 取出剪枝保留的权重分值
                 _g_len = len(_np_x)
