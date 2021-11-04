@@ -215,6 +215,8 @@ def Panning(net, ratio, train_dataloader, device,
                 x = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
             if prune_mode == 8:
                 x = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
+            if prune_mode == 9:
+                x = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
