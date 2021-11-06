@@ -106,8 +106,9 @@ def Panning(net, ratio, train_dataloader, device,
     gab = 0
     gbc = 0
     gac = 0
-    # gaba = 0
-    # gabb = 0
+    # gla = 0
+    # glb = 0
+    # glc = 0
     _layer = 0
     for layer in net.modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
@@ -115,15 +116,19 @@ def Panning(net, ratio, train_dataloader, device,
             gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
             gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
             gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
-            # gaba += ((grad_a[_layer]+grad_b[_layer]) * grad_a[_layer]).sum()  # gab * ga
-            # gabb += ((grad_a[_layer]+grad_b[_layer]) * grad_b[_layer]).sum()  # gab * gb
+            # grad_l = grad_a[_layer]+grad_b[_layer]+grad_c[_layer]
+            # gla += (grad_l * grad_a[_layer]).sum()  # gl * ga
+            # glb += (grad_l * grad_b[_layer]).sum()  # gl * gb
+            # glc += (grad_l * grad_c[_layer]).sum()  # gl * gc
             _layer += 1
     print(gab, gbc, gac)
+    # print(gla, glb, glc)
     grad_gab = autograd.grad(gab, weights, retain_graph=True)
     grad_gbc = autograd.grad(gbc, weights, retain_graph=True)
     grad_gac = autograd.grad(gac, weights, retain_graph=True)
-    # grad_gaba = autograd.grad(gaba, weights, retain_graph=True)
-    # grad_gabb = autograd.grad(gabb, weights, retain_graph=True)
+    # grad_gla = autograd.grad(gla, weights, retain_graph=True)
+    # grad_glb = autograd.grad(glb, weights, retain_graph=True)
+    # grad_glc = autograd.grad(glc, weights, retain_graph=True)
 
     # -------- 优化，经典的时间换内存，但是有bug，🤮 --------
     # print("gradient => g and Hg")
@@ -200,6 +205,9 @@ def Panning(net, ratio, train_dataloader, device,
             # a = layer.weight.data * grad_gg[0][layer_cnt]  # theta_q grad_l2
             # b = layer.weight.data * grad_gg[1][layer_cnt]  # theta_q grad_l2
             # c = layer.weight.data * grad_gg[2][layer_cnt]  # theta_q grad_l2
+            # a = layer.weight.data * grad_gla[layer_cnt]  # theta_q grad_l2
+            # b = layer.weight.data * grad_glb[layer_cnt]  # theta_q grad_l2
+            # c = layer.weight.data * grad_glc[layer_cnt]  # theta_q grad_l2
 
             x = a
             if prune_mode == 1:
@@ -214,12 +222,6 @@ def Panning(net, ratio, train_dataloader, device,
                 x = torch.abs(a) + torch.abs(b) + torch.abs(c)
             if prune_mode == 6:
                 x = torch.abs(a)
-            # if prune_mode == 7:
-            #     x = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
-            # if prune_mode == 8:
-            #     x = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
-            # if prune_mode == 9:
-            #     x = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -240,9 +242,10 @@ def Panning(net, ratio, train_dataloader, device,
                 grads_b[old_modules[idx]] = torch.abs(b)
                 grads_c[old_modules[idx]] = torch.abs(c)
             if debug_mode == 2:
-                grads_a[old_modules[idx]] = grad_gab[layer_cnt]
-                grads_b[old_modules[idx]] = grad_gbc[layer_cnt]
-                grads_c[old_modules[idx]] = grad_gac[layer_cnt]
+                grad_l = grad_a[layer_cnt] + grad_b[layer_cnt] + grad_c[layer_cnt]
+                grads_a[old_modules[idx]] = grad_l*grad_a[layer_cnt]
+                grads_b[old_modules[idx]] = grad_l*grad_b[layer_cnt]
+                grads_c[old_modules[idx]] = grad_l*grad_c[layer_cnt]
             # grads_a[old_modules[idx]] = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
             # grads_b[old_modules[idx]] = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
             # grads_c[old_modules[idx]] = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
