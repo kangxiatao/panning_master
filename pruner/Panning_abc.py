@@ -60,7 +60,7 @@ def count_fc_parameters(net):
 def Panning(net, ratio, train_dataloader, device,
             num_classes=10, samples_per_class=15, num_iters=3, T=200, reinit=True,
             prune_mode=3, prune_conv=False, add_link=False, delete_link=False, delete_conv=False, enlarge=False,
-            prune_link=True):
+            prune_link=False, debug_mode=False, debug_path='', debug_epoch=0):
     eps = 1e-10
     # print(f'ratio:{ratio}')
     keep_ratio = (1 - ratio)
@@ -106,8 +106,8 @@ def Panning(net, ratio, train_dataloader, device,
     gab = 0
     gbc = 0
     gac = 0
-    gaba = 0
-    gabb = 0
+    # gaba = 0
+    # gabb = 0
     _layer = 0
     for layer in net.modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
@@ -115,15 +115,15 @@ def Panning(net, ratio, train_dataloader, device,
             gab += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
             gbc += (grad_c[_layer] * grad_b[_layer]).sum()  # gb * gc
             gac += (grad_a[_layer] * grad_c[_layer]).sum()  # ga * gc
-            gaba += ((grad_a[_layer]+grad_b[_layer]) * grad_a[_layer]).sum()  # gab * ga
-            gabb += ((grad_a[_layer]+grad_b[_layer]) * grad_b[_layer]).sum()  # gab * gb
+            # gaba += ((grad_a[_layer]+grad_b[_layer]) * grad_a[_layer]).sum()  # gab * ga
+            # gabb += ((grad_a[_layer]+grad_b[_layer]) * grad_b[_layer]).sum()  # gab * gb
             _layer += 1
     print(gab, gbc, gac)
     grad_gab = autograd.grad(gab, weights, retain_graph=True)
     grad_gbc = autograd.grad(gbc, weights, retain_graph=True)
     grad_gac = autograd.grad(gac, weights, retain_graph=True)
-    grad_gaba = autograd.grad(gaba, weights, retain_graph=True)
-    grad_gabb = autograd.grad(gabb, weights, retain_graph=True)
+    # grad_gaba = autograd.grad(gaba, weights, retain_graph=True)
+    # grad_gabb = autograd.grad(gabb, weights, retain_graph=True)
 
     # -------- 优化，经典的时间换内存，但是有bug，🤮 --------
     # print("gradient => g and Hg")
@@ -177,6 +177,9 @@ def Panning(net, ratio, train_dataloader, device,
             4 - 和绝对值
             5 - 依据和得到网络比例，按绝对值和修剪
             6 - 取一组的绝对值
+        debug_mode:
+            1 - 梯度相似敏感度图
+            2 - 梯度相似图（g1,g2,g3）
     """
 
     # === 计算分值 ===
@@ -211,12 +214,12 @@ def Panning(net, ratio, train_dataloader, device,
                 x = torch.abs(a) + torch.abs(b) + torch.abs(c)
             if prune_mode == 6:
                 x = torch.abs(a)
-            if prune_mode == 7:
-                x = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
-            if prune_mode == 8:
-                x = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
-            if prune_mode == 9:
-                x = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
+            # if prune_mode == 7:
+            #     x = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
+            # if prune_mode == 8:
+            #     x = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
+            # if prune_mode == 9:
+            #     x = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -232,9 +235,17 @@ def Panning(net, ratio, train_dataloader, device,
             # 评估分数
             grads[old_modules[idx]] = x
             # --- for debug ---
-            grads_a[old_modules[idx]] = torch.abs(a)
-            grads_b[old_modules[idx]] = torch.abs(b)
-            grads_c[old_modules[idx]] = torch.abs(c)
+            if debug_mode == 1:
+                grads_a[old_modules[idx]] = torch.abs(a)
+                grads_b[old_modules[idx]] = torch.abs(b)
+                grads_c[old_modules[idx]] = torch.abs(c)
+            if debug_mode == 2:
+                grads_a[old_modules[idx]] = grad_gab[layer_cnt]
+                grads_b[old_modules[idx]] = grad_gbc[layer_cnt]
+                grads_c[old_modules[idx]] = grad_gac[layer_cnt]
+            # grads_a[old_modules[idx]] = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
+            # grads_b[old_modules[idx]] = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
+            # grads_c[old_modules[idx]] = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
             # -----------------
             if prune_mode == 5:
                 grads_prune[old_modules[idx]] = -(a + b + c)
@@ -292,7 +303,7 @@ def Panning(net, ratio, train_dataloader, device,
         print('** accept: ', acceptable_score)
 
         for m, g in grads.items():
-            if prune_link:
+            if prune_link or prune_mode == 0:
                 keep_masks[m] = torch.ones_like(g).float()
             else:
                 keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
@@ -525,113 +536,166 @@ def Panning(net, ratio, train_dataloader, device,
 
     # ============== debug ==============
     debug = False
-    if debug:
-        # 得到剪枝比例
-        ratio_layer_a = []
-        ratio_layer_b = []
-        ratio_layer_c = []
-        prune_a = dict()
-        prune_b = dict()
-        prune_c = dict()
+    if debug or debug_mode > 0:
+        if debug_mode == 1:
+            # 得到剪枝比例
+            ratio_layer_a = []
+            ratio_layer_b = []
+            ratio_layer_c = []
+            prune_a = dict()
+            prune_b = dict()
+            prune_c = dict()
 
-        all_scores = torch.cat([torch.flatten(x) for x in grads_a.values()])
-        norm_factor = torch.abs(torch.sum(all_scores)) + eps
-        all_scores.div_(norm_factor)
-        num_params_to_rm = int(len(all_scores) * keep_ratio)
-        threshold, _index = torch.topk(all_scores, num_params_to_rm)
-        acceptable_score = threshold[-1]
-        for m, g in grads_a.items():
-            prune_a[m] = ((g / norm_factor) >= acceptable_score).float()
-        for m, g in prune_a.items():
-            remain_num = torch.sum(torch.flatten(g == 1))
-            delete_num = torch.sum(torch.flatten(g == 0))
-            all_num = remain_num + delete_num
-            ratio = float(remain_num) / float(all_num)
-            ratio_layer_a.append(ratio)
+            all_scores = torch.cat([torch.flatten(x) for x in grads_a.values()])
+            norm_factor = torch.abs(torch.sum(all_scores)) + eps
+            all_scores.div_(norm_factor)
+            num_params_to_rm = int(len(all_scores) * keep_ratio)
+            threshold, _index = torch.topk(all_scores, num_params_to_rm)
+            acceptable_score = threshold[-1]
+            for m, g in grads_a.items():
+                prune_a[m] = ((g / norm_factor) >= acceptable_score).float()
+            for m, g in prune_a.items():
+                remain_num = torch.sum(torch.flatten(g == 1))
+                delete_num = torch.sum(torch.flatten(g == 0))
+                all_num = remain_num + delete_num
+                ratio = float(remain_num) / float(all_num)
+                ratio_layer_a.append(ratio)
 
-        all_scores = torch.cat([torch.flatten(x) for x in grads_b.values()])
-        norm_factor = torch.abs(torch.sum(all_scores)) + eps
-        all_scores.div_(norm_factor)
-        num_params_to_rm = int(len(all_scores) * keep_ratio)
-        threshold, _index = torch.topk(all_scores, num_params_to_rm)
-        acceptable_score = threshold[-1]
-        for m, g in grads_b.items():
-            prune_b[m] = ((g / norm_factor) >= acceptable_score).float()
-        for m, g in prune_b.items():
-            remain_num = torch.sum(torch.flatten(g == 1))
-            delete_num = torch.sum(torch.flatten(g == 0))
-            all_num = remain_num + delete_num
-            ratio = float(remain_num) / float(all_num)
-            ratio_layer_b.append(ratio)
+            all_scores = torch.cat([torch.flatten(x) for x in grads_b.values()])
+            norm_factor = torch.abs(torch.sum(all_scores)) + eps
+            all_scores.div_(norm_factor)
+            num_params_to_rm = int(len(all_scores) * keep_ratio)
+            threshold, _index = torch.topk(all_scores, num_params_to_rm)
+            acceptable_score = threshold[-1]
+            for m, g in grads_b.items():
+                prune_b[m] = ((g / norm_factor) >= acceptable_score).float()
+            for m, g in prune_b.items():
+                remain_num = torch.sum(torch.flatten(g == 1))
+                delete_num = torch.sum(torch.flatten(g == 0))
+                all_num = remain_num + delete_num
+                ratio = float(remain_num) / float(all_num)
+                ratio_layer_b.append(ratio)
 
-        all_scores = torch.cat([torch.flatten(x) for x in grads_c.values()])
-        norm_factor = torch.abs(torch.sum(all_scores)) + eps
-        all_scores.div_(norm_factor)
-        num_params_to_rm = int(len(all_scores) * keep_ratio)
-        threshold, _index = torch.topk(all_scores, num_params_to_rm)
-        acceptable_score = threshold[-1]
-        for m, g in grads_c.items():
-            prune_c[m] = ((g / norm_factor) >= acceptable_score).float()
-        for m, g in prune_c.items():
-            remain_num = torch.sum(torch.flatten(g == 1))
-            delete_num = torch.sum(torch.flatten(g == 0))
-            all_num = remain_num + delete_num
-            ratio = float(remain_num) / float(all_num)
-            ratio_layer_c.append(ratio)
-        print(ratio_layer_a)
-        print(ratio_layer_b)
-        print(ratio_layer_c)
+            all_scores = torch.cat([torch.flatten(x) for x in grads_c.values()])
+            norm_factor = torch.abs(torch.sum(all_scores)) + eps
+            all_scores.div_(norm_factor)
+            num_params_to_rm = int(len(all_scores) * keep_ratio)
+            threshold, _index = torch.topk(all_scores, num_params_to_rm)
+            acceptable_score = threshold[-1]
+            for m, g in grads_c.items():
+                prune_c[m] = ((g / norm_factor) >= acceptable_score).float()
+            for m, g in prune_c.items():
+                remain_num = torch.sum(torch.flatten(g == 1))
+                delete_num = torch.sum(torch.flatten(g == 0))
+                all_num = remain_num + delete_num
+                ratio = float(remain_num) / float(all_num)
+                ratio_layer_c.append(ratio)
+            print(ratio_layer_a)
+            print(ratio_layer_b)
+            print(ratio_layer_c)
 
-        user_layer = 3  # 41.75%
-        # user_layer = 0
-        for _layer, _key in enumerate(grad_key):
-            if _layer == user_layer:
-                import matplotlib.pyplot as plt
-                from matplotlib import cm
-                from mpl_toolkits.mplot3d import Axes3D  # 空间三维画图
+            user_layer = 3  # 41.75%
+            # user_layer = 0
+            for _layer, _key in enumerate(grad_key):
+                if _layer == user_layer:
+                    import matplotlib.pyplot as plt
+                    from matplotlib import cm
+                    from mpl_toolkits.mplot3d import Axes3D  # 空间三维画图
 
-                plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-                plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+                    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+                    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
 
-                fig = plt.figure()
-                ax = fig.add_subplot(111, projection='3d')
+                    dpi = 60
+                    xpixels = 1200
+                    ypixels = 1200
+                    xinch = xpixels / dpi
+                    yinch = ypixels / dpi
+                    fig = plt.figure(figsize=(xinch,yinch))
+                    ax = fig.add_subplot(111, projection='3d')
 
-                # 分值转numpy
-                _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
-                _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
-                _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
-                _np_x = np.log(_xa.cpu().detach().numpy())
-                _np_y = np.log(_yb.cpu().detach().numpy())
-                _np_z = np.log(_zc.cpu().detach().numpy())
-                # 画出全部点
-                # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='ivory', s=1, alpha=0.3, marker='.')
-                # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='black', s=1, alpha=0.3, marker='.')
-                ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='coral', s=1, alpha=0.3, marker='.')
+                    # 分值转numpy
+                    _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
+                    _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
+                    _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
+                    # _np_x = _xa.cpu().detach().numpy()
+                    # _np_y = _yb.cpu().detach().numpy()
+                    # _np_z = _zc.cpu().detach().numpy()
+                    _np_x = np.log(_xa.cpu().detach().numpy())
+                    _np_y = np.log(_yb.cpu().detach().numpy())
+                    _np_z = np.log(_zc.cpu().detach().numpy())
+                    # 画出全部点
+                    # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='ivory', s=1, alpha=0.3, marker='.')
+                    ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='black', s=1, alpha=0.3, marker='.')
+                    # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='coral', s=1, alpha=0.3, marker='.')
 
-                # 取出剪枝保留的权重分值
-                _g_len = len(_np_x)
-                _pr_index_a = np.argsort(_np_x)[int(_g_len*ratio_layer_a[user_layer]):]
-                _np_pr_ax = _np_x[_pr_index_a]
-                _np_pr_ay = _np_y[_pr_index_a]
-                _np_pr_az = _np_z[_pr_index_a]
-                _pr_index_b = np.argsort(_np_y)[int(_g_len*ratio_layer_b[user_layer]):]
-                _np_pr_bx = _np_x[_pr_index_b]
-                _np_pr_by = _np_y[_pr_index_b]
-                _np_pr_bz = _np_z[_pr_index_b]
-                _pr_index_c = np.argsort(_np_z)[int(_g_len*ratio_layer_c[user_layer]):]
-                _np_pr_cx = _np_x[_pr_index_c]
-                _np_pr_cy = _np_y[_pr_index_c]
-                _np_pr_cz = _np_z[_pr_index_c]
-                # # 画出保留点
-                ax.scatter(xs=_np_pr_ax, ys=_np_pr_ay, zs=_np_pr_az, c='gold', s=1, alpha=0.3, marker='o')
-                ax.scatter(xs=_np_pr_bx, ys=_np_pr_by, zs=_np_pr_bz, c='mediumvioletred', s=1, alpha=0.3, marker='+')
-                ax.scatter(xs=_np_pr_cx, ys=_np_pr_cy, zs=_np_pr_cz, c='skyblue', s=1, alpha=0.3, marker='*')
+                    # 取出剪枝保留的权重分值
+                    _g_len = len(_np_x)
+                    _pr_index_a = np.argsort(_np_x)[int(_g_len * ratio_layer_a[user_layer]):]
+                    _np_pr_ax = _np_x[_pr_index_a]
+                    _np_pr_ay = _np_y[_pr_index_a]
+                    _np_pr_az = _np_z[_pr_index_a]
+                    _pr_index_b = np.argsort(_np_y)[int(_g_len * ratio_layer_b[user_layer]):]
+                    _np_pr_bx = _np_x[_pr_index_b]
+                    _np_pr_by = _np_y[_pr_index_b]
+                    _np_pr_bz = _np_z[_pr_index_b]
+                    _pr_index_c = np.argsort(_np_z)[int(_g_len * ratio_layer_c[user_layer]):]
+                    _np_pr_cx = _np_x[_pr_index_c]
+                    _np_pr_cy = _np_y[_pr_index_c]
+                    _np_pr_cz = _np_z[_pr_index_c]
+                    # # 画出保留点
+                    ax.scatter(xs=_np_pr_ax, ys=_np_pr_ay, zs=_np_pr_az, c='gold', s=1, alpha=0.3, marker='o')
+                    ax.scatter(xs=_np_pr_bx, ys=_np_pr_by, zs=_np_pr_bz, c='mediumvioletred', s=1, alpha=0.3, marker='+')
+                    ax.scatter(xs=_np_pr_cx, ys=_np_pr_cy, zs=_np_pr_cz, c='skyblue', s=1, alpha=0.3, marker='*')
 
-                # _lim = np.mean(_np_x) * 5
-                # ax.set_xlim([0, _lim])
-                # ax.set_ylim([0, _lim])
-                # ax.set_zlim([0, _lim])
-                plt.show()
+                    # _lim = np.mean(_np_x) * 5
+                    # ax.set_xlim([0, _lim])
+                    # ax.set_ylim([0, _lim])
+                    # ax.set_zlim([0, _lim])
+                    plt.savefig(debug_path + 'epoch_' + str(debug_epoch) + '.png', dpi = dpi)
+                    plt.show()
+
+        if debug_mode == 2:
+            user_layer = 3  # 41.75%
+            # user_layer = 0
+            for _layer, _key in enumerate(grad_key):
+                if _layer == user_layer:
+                    import matplotlib.pyplot as plt
+                    from matplotlib import cm
+                    from mpl_toolkits.mplot3d import Axes3D  # 空间三维画图
+
+                    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+                    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+
+                    dpi = 60
+                    xpixels = 1200
+                    ypixels = 1200
+                    xinch = xpixels / dpi
+                    yinch = ypixels / dpi
+                    fig = plt.figure(figsize=(xinch,yinch))
+                    ax = fig.add_subplot(111, projection='3d')
+
+                    # 分值转numpy
+                    _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
+                    _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
+                    _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
+                    _np_x = _xa.cpu().detach().numpy()
+                    _np_y = _yb.cpu().detach().numpy()
+                    _np_z = _zc.cpu().detach().numpy()
+                    # _np_x = np.log(_xa.cpu().detach().numpy())
+                    # _np_y = np.log(_yb.cpu().detach().numpy())
+                    # _np_z = np.log(_zc.cpu().detach().numpy())
+                    # 画出全部点
+                    # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='ivory', s=1, alpha=0.3, marker='.')
+                    ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='mediumvioletred', s=1, alpha=0.3, marker='.')
+                    # ax.scatter(xs=_np_x, ys=_np_y, zs=_np_z, c='coral', s=1, alpha=0.3, marker='.')
+
+                    # _lim = np.mean(_np_x) * 5
+                    # ax.set_xlim([0, _lim])
+                    # ax.set_ylim([0, _lim])
+                    # ax.set_zlim([0, _lim])
+                    plt.subplots_adjust(left=0.005, right=0.995, top=0.995, bottom=0.005)
+                    plt.savefig(debug_path + 'epoch_' + str(debug_epoch) + '.png', dpi=dpi)
+                    plt.show()
 
     # =====================================
 

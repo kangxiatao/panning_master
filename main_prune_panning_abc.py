@@ -34,7 +34,7 @@ def init_config():
     parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='exp1')
-    parser.add_argument('--epoch', type=str, default='666')
+    parser.add_argument('--epoch', type=str, default='1')
     parser.add_argument('--prune_mode', type=int, default=7)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
@@ -44,6 +44,7 @@ def init_config():
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
     parser.add_argument('--remain', type=float, default=666)
+    parser.add_argument('--debug', type=int, default=2)  # 调试标记（打印数据和作图等）
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
     args = parser.parse_args()
 
@@ -64,7 +65,9 @@ def init_config():
     config.core_link = True if args.core_link == 1 else False
     config.enlarge = True if args.enlarge == 1 else False
     config.prune_link = True if args.prune_link == 1 else False
+    # config.debug = True if args.debug == 1 else False
     config.prune_epoch = args.prune_epoch
+    config.debug = args.debug
     config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
     config.send_mail_str = (mail_log.get_words() + '\n')
@@ -288,6 +291,23 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             # ========== print pruning details ============
             logger.info('**[%d] Mask and training setting: ' % iteration)
             print_inf = print_mask_information(mb, logger)
+        # 训练中得到模型状态
+        if config.debug > 0 and epoch == 89:
+            masks = Panning(mb.model, ratio, trainloader, 'cuda',
+                            num_classes=num_classes,
+                            samples_per_class=config.samples_per_class,
+                            num_iters=config.get('num_iters', 1),
+                            reinit=False,
+                            prune_mode=0,
+                            prune_conv=False,
+                            add_link=False,
+                            delete_link=False,
+                            enlarge=False,
+                            prune_link=False,
+                            debug_mode=config.debug,
+                            debug_path=config.summary_dir,
+                            debug_epoch=epoch
+                            )
 
         train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer, iteration=iteration)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
@@ -311,6 +331,24 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             torch.save(state, path)
             best_acc = test_acc
             best_epoch = epoch
+
+    # 训练后得到模型状态
+    if config.debug > 0:
+        masks = Panning(mb.model, ratio, trainloader, 'cuda',
+                        num_classes=num_classes,
+                        samples_per_class=config.samples_per_class,
+                        num_iters=config.get('num_iters', 1),
+                        reinit=False,
+                        prune_mode=0,
+                        prune_conv=False,
+                        add_link=False,
+                        delete_link=False,
+                        enlarge=False,
+                        prune_link=False,
+                        debug_mode=config.debug,
+                        debug_path=config.summary_dir,
+                        debug_epoch=num_epochs
+                        )
 
     logger.info('Iteration [%d], best acc: %.4f, epoch: %d' %
                 (iteration, best_acc, best_epoch))
@@ -399,7 +437,9 @@ def main(config):
                     add_link=config.core_link,
                     delete_link=config.core_link,
                     enlarge=config.enlarge,
-                    prune_link=config.prune_link
+                    prune_link=config.prune_link,
+                    debug_mode=config.debug,
+                    debug_path=config.summary_dir
                     )
     # ========== register mask ==================
     mb.register_mask(masks)
