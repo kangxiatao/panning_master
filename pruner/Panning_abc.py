@@ -58,7 +58,7 @@ def count_fc_parameters(net):
 
 
 def Panning(net, ratio, train_dataloader, device,
-            num_classes=10, samples_per_class=15, num_iters=3, T=200, reinit=True,
+            num_classes=10, samples_per_class=15, num_iters=3, T=200, reinit=True, prune_masks=None,
             prune_mode=3, prune_conv=False, add_link=False, delete_link=False, delete_conv=False, enlarge=False,
             prune_link=False, debug_mode=False, debug_path='', debug_epoch=0):
     eps = 1e-10
@@ -184,7 +184,8 @@ def Panning(net, ratio, train_dataloader, device,
             6 - 取一组的绝对值
         debug_mode:
             1 - 梯度相似敏感度图
-            2 - 梯度相似图（g1,g2,g3）
+            2 - 梯度相似图(gl1,gl2,gl3)
+            3 - 梯度相似图(gl1,gl2)
     """
 
     # === 计算分值 ===
@@ -246,9 +247,12 @@ def Panning(net, ratio, train_dataloader, device,
                 grads_a[old_modules[idx]] = grad_l*grad_a[layer_cnt]
                 grads_b[old_modules[idx]] = grad_l*grad_b[layer_cnt]
                 grads_c[old_modules[idx]] = grad_l*grad_c[layer_cnt]
-            # grads_a[old_modules[idx]] = torch.abs(layer.weight.data * grad_gaba[layer_cnt])
-            # grads_b[old_modules[idx]] = torch.abs(layer.weight.data * grad_gabb[layer_cnt])
-            # grads_c[old_modules[idx]] = torch.abs(layer.weight.data * grad_gaba[layer_cnt]) + torch.abs(layer.weight.data * grad_gabb[layer_cnt])
+            if debug_mode == 3:
+                grad_l = grad_a[layer_cnt] + grad_b[layer_cnt]
+                grads_a[old_modules[idx]] = grad_l*grad_a[layer_cnt]
+                grads_b[old_modules[idx]] = grad_l*grad_b[layer_cnt]
+                # grads_a[old_modules[idx]] = torch.abs(a)
+                # grads_b[old_modules[idx]] = torch.abs(b)
             # -----------------
             if prune_mode == 5:
                 grads_prune[old_modules[idx]] = -(a + b + c)
@@ -602,8 +606,7 @@ def Panning(net, ratio, train_dataloader, device,
             for _layer, _key in enumerate(grad_key):
                 if _layer == user_layer:
                     import matplotlib.pyplot as plt
-                    from matplotlib import cm
-                    from mpl_toolkits.mplot3d import Axes3D  # 空间三维画图
+                    from mpl_toolkits.mplot3d import Axes3D
 
                     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
                     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
@@ -658,13 +661,15 @@ def Panning(net, ratio, train_dataloader, device,
                     plt.show()
 
         if debug_mode == 2:
-            user_layer = 3  # 41.75%
-            # user_layer = 0
+            # user_layer = 3  # 41.75%
+            user_layer = 15  # 0.3%
+
+            if prune_masks is None:
+                prune_masks = keep_masks
             for _layer, _key in enumerate(grad_key):
                 if _layer == user_layer:
                     import matplotlib.pyplot as plt
-                    from matplotlib import cm
-                    from mpl_toolkits.mplot3d import Axes3D  # 空间三维画图
+                    from mpl_toolkits.mplot3d import Axes3D
 
                     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
                     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
@@ -678,9 +683,12 @@ def Panning(net, ratio, train_dataloader, device,
                     ax = fig.add_subplot(111, projection='3d')
 
                     # 分值转numpy
-                    _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
-                    _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
-                    _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
+                    _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]][prune_masks[grad_key[_layer]] > 0])])
+                    _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]][prune_masks[grad_key[_layer]] > 0])])
+                    _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]][prune_masks[grad_key[_layer]] > 0])])
+                    # _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
+                    # _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
+                    # _zc = torch.cat([torch.flatten(grads_c[grad_key[_layer]])])
                     _np_x = _xa.cpu().detach().numpy()
                     _np_y = _yb.cpu().detach().numpy()
                     _np_z = _zc.cpu().detach().numpy()
@@ -698,6 +706,46 @@ def Panning(net, ratio, train_dataloader, device,
                     # ax.set_zlim([0, _lim])
                     plt.subplots_adjust(left=0.005, right=0.995, top=0.995, bottom=0.005)
                     plt.savefig(debug_path + 'epoch_' + str(debug_epoch) + '.png', dpi=dpi)
+                    plt.show()
+
+        if debug_mode == 3:
+            user_layer = 15  # 0.3%
+
+            if prune_masks is None:
+                prune_masks = keep_masks
+            for _layer, _key in enumerate(grad_key):
+                if _layer == user_layer:
+                    import matplotlib.pyplot as plt
+
+                    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+                    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+
+                    dpi = 100
+                    xpixels = 1200
+                    ypixels = 1200
+                    xinch = xpixels / dpi
+                    yinch = ypixels / dpi
+                    plt.figure(figsize=(xinch,yinch))
+
+                    # 分值转numpy [prune_masks[grad_key[_layer]] > 0]
+                    _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]][prune_masks[grad_key[_layer]] > 0])])
+                    _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]][prune_masks[grad_key[_layer]] > 0])])
+                    # _xa = torch.cat([torch.flatten(grads_a[grad_key[_layer]])])
+                    # _yb = torch.cat([torch.flatten(grads_b[grad_key[_layer]])])
+                    _np_x = _xa.cpu().detach().numpy()
+                    _np_y = _yb.cpu().detach().numpy()
+                    # _np_x = np.log(_xa.cpu().detach().numpy())
+                    # _np_y = np.log(_yb.cpu().detach().numpy())
+                    # _np_z = np.log(_zc.cpu().detach().numpy())
+                    # 画出全部点
+                    plt.scatter(_np_x, _np_y, c='mediumvioletred', s=2, alpha=0.8, marker='.')
+
+                    _lim_max = np.max(_np_x) / 4
+                    _lim_min = np.min(_np_x) / 4
+                    plt.xlim([_lim_min, _lim_max])
+                    plt.ylim([_lim_min, _lim_max])
+                    plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.07)
+                    plt.savefig(debug_path + 'epoch_' + str(debug_epoch) + 'layer_' + str(user_layer) + '.png', dpi=dpi)
                     plt.show()
 
     # =====================================

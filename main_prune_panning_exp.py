@@ -34,9 +34,9 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
     parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
-    parser.add_argument('--run', type=str, default='exp2')
+    parser.add_argument('--run', type=str, default='exp123')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=6)
+    parser.add_argument('--prune_mode', type=int, default=5)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
@@ -218,6 +218,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         gr_l2 = 0
         grasp_l2 = 0
         g1_g2 = 0  # for debug
+        g1_g2_sim = 0  # for debug
         count = 0
         for layer in net.modules():
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
@@ -225,6 +226,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
                 gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
                 if it % 2 == 1:
                     g1_g2 += (grad_f[count] * last_grad_f[count]).sum()  # g1 * g2
+                    g1_g2_sim += (grad_f[count] * last_grad_f[count]).sum() / (grad_f[count].pow(2).sum().sqrt()*last_grad_f[count].pow(2).sum().sqrt())
                 count += 1
 
         if it % 2 == 0:
@@ -299,6 +301,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     writer.add_scalar('iter_%d/train/gral2' % iteration, all_gral2, epoch)
     writer.add_scalar('iter_%d/train/gl2' % iteration, all_gl2, epoch)
     writer.add_scalar('iter_%d/train/g1_g2' % iteration, g1_g2, epoch)
+    writer.add_scalar('iter_%d/train/g1_g2_sim' % iteration, g1_g2_sim, epoch)
     # writer.add_scalar('iter_%d/train/ghg' % iteration, ghg, epoch)
     # writer.add_scalar('iter_%d/train/_diff_sum' % iteration, _diff_sum, epoch)
     # writer.add_scalar('iter_%d/train/_grasp_mean' % iteration, _grasp_mean, epoch)

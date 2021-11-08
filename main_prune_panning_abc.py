@@ -33,9 +33,9 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
     parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
-    parser.add_argument('--run', type=str, default='exp1')
+    parser.add_argument('--run', type=str, default='exp5')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=3)
+    parser.add_argument('--prune_mode', type=int, default=6)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
@@ -44,7 +44,7 @@ def init_config():
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
     parser.add_argument('--remain', type=float, default=666)
-    parser.add_argument('--debug', type=int, default=2)  # 调试标记（打印数据和作图等）
+    parser.add_argument('--debug', type=int, default=3)  # 调试标记（打印数据和作图等）
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
     args = parser.parse_args()
 
@@ -261,7 +261,7 @@ def test(net, loader, criterion, epoch, writer, iteration):
 
 
 def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, learning_rate, weight_decay, num_epochs,
-               iteration, ratio, num_classes, logger):
+               iteration, ratio, num_classes, logger, prune_masks=None):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
@@ -292,12 +292,13 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             logger.info('**[%d] Mask and training setting: ' % iteration)
             print_inf = print_mask_information(mb, logger)
         # 训练中得到模型状态
-        if config.debug > 0 and epoch == 89:
+        if config.debug > 0 and epoch == 1:
             masks = Panning(mb.model, ratio, trainloader, 'cuda',
                             num_classes=num_classes,
                             samples_per_class=config.samples_per_class,
                             num_iters=config.get('num_iters', 1),
                             reinit=False,
+                            prune_masks=prune_masks,
                             prune_mode=0,
                             prune_conv=False,
                             add_link=False,
@@ -339,6 +340,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                         samples_per_class=config.samples_per_class,
                         num_iters=config.get('num_iters', 1),
                         reinit=False,
+                        prune_masks=prune_masks,
                         prune_mode=0,
                         prune_conv=False,
                         add_link=False,
@@ -467,7 +469,9 @@ def main(config):
                                    iteration=iteration,
                                    ratio=ratio,
                                    num_classes=classes[config.dataset],
-                                   logger=logger)
+                                   logger=logger,
+                                   prune_masks=masks
+                                   )
 
     config.send_mail_str += print_inf
     config.send_mail_str += tr_str
