@@ -36,14 +36,15 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='exp123')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=5)
+    parser.add_argument('--prune_mode', type=int, default=7)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
-    parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
+    parser.add_argument('--prune_epoch', type=int, default=0)  # 第二次修剪时间
+    parser.add_argument('--single_data', type=int, default=0)  # 单次修剪的数据方式
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--lr_mode', type=str, default='cosine', help='cosine or preset')
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
@@ -67,6 +68,7 @@ def init_config():
     config.enlarge = True if args.enlarge == 1 else False
     config.prune_link = True if args.prune_link == 1 else False
     config.prune_epoch = args.prune_epoch
+    config.single_data = args.single_data
     config.lr_mode = args.lr_mode
     config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
@@ -128,7 +130,7 @@ def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
                                                             config.depth))
 
 
-def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10):
+def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10, masks=None):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
@@ -193,6 +195,9 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     for idx in range(len(grad_w)):
         grad_w[idx] += grad_w_p[idx]
 
+    # layer_key
+    layer_key = [x for x in masks.keys()]
+
     # 梯度范数的梯度
     # 生气了，🤬
     all_gral2 = 0  # g0 * g1 and g0 * g2
@@ -218,15 +223,22 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         gr_l2 = 0
         grasp_l2 = 0
         g1_g2 = 0  # for debug
-        g1_g2_sim = 0  # for debug
+        g1_g2_list = []  # for debug
+        # g1_g2_sim = 0  # for debug
+        g1_g2_sim_list = []  # for debug
         count = 0
         for layer in net.modules():
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-                grasp_l2 += (grad_w[count].data * grad_f[count]).sum()  # g0 * g1 and g0 * g2
-                gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
+                # grasp_l2 += (grad_w[count].data * grad_f[count]).sum()  # g0 * g1 and g0 * g2
+                grasp_l2 += (grad_w[count].data * grad_f[count] * masks[layer_key[count]]).sum()  # g0 * g1 and g0 * g2
+                # gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
+                gr_l2 += ((grad_f[count] * masks[layer_key[count]]).pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
                 if it % 2 == 1:
-                    g1_g2 += (grad_f[count] * last_grad_f[count]).sum()  # g1 * g2
-                    g1_g2_sim += (grad_f[count] * last_grad_f[count]).sum() / (grad_f[count].pow(2).sum().sqrt()*last_grad_f[count].pow(2).sum().sqrt())
+                    layer_g1g2 = (grad_f[count] * last_grad_f[count] * masks[layer_key[count]]).sum()  # g1 * g2
+                    g1_g2 += layer_g1g2
+                    g1_g2_list.append(layer_g1g2)
+                    # g1_g2_sim += (grad_f[count] * last_grad_f[count]).sum() / (grad_f[count].pow(2).sum().sqrt()*last_grad_f[count].pow(2).sum().sqrt())
+                    g1_g2_sim_list.append(layer_g1g2 / ((grad_f[count]*masks[layer_key[count]]).pow(2).sum().sqrt()*(last_grad_f[count]*masks[layer_key[count]]).pow(2).sum().sqrt()))
                 count += 1
 
         if it % 2 == 0:
@@ -301,7 +313,11 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     writer.add_scalar('iter_%d/train/gral2' % iteration, all_gral2, epoch)
     writer.add_scalar('iter_%d/train/gl2' % iteration, all_gl2, epoch)
     writer.add_scalar('iter_%d/train/g1_g2' % iteration, g1_g2, epoch)
-    writer.add_scalar('iter_%d/train/g1_g2_sim' % iteration, g1_g2_sim, epoch)
+    writer.add_scalar('iter_%d/train/g1g2_conv' % iteration, g1_g2_list[15], epoch)
+    writer.add_scalar('iter_%d/train/g1g2_line' % iteration, g1_g2_list[16], epoch)
+    writer.add_scalar('iter_%d/train/sim_conv' % iteration, g1_g2_sim_list[15], epoch)
+    writer.add_scalar('iter_%d/train/sim_line' % iteration, g1_g2_sim_list[16], epoch)
+    # writer.add_scalar('iter_%d/train/g1_g2_sim' % iteration, g1_g2_sim, epoch)
     # writer.add_scalar('iter_%d/train/ghg' % iteration, ghg, epoch)
     # writer.add_scalar('iter_%d/train/_diff_sum' % iteration, _diff_sum, epoch)
     # writer.add_scalar('iter_%d/train/_grasp_mean' % iteration, _grasp_mean, epoch)
@@ -341,7 +357,7 @@ def test(net, loader, criterion, epoch, writer, iteration):
 
 
 def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, learning_rate, weight_decay, num_epochs,
-               iteration, ratio, num_classes, logger, last_mask, lr_mode='cosine'):
+               iteration, ratio, num_classes, logger, last_mask, keep_masks=None, lr_mode='cosine'):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
     lr_scheduler = None
@@ -375,7 +391,8 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                                add_link=config.core_link,
                                delete_link=config.core_link,
                                enlarge=config.enlarge,
-                               prune_link=config.prune_link
+                               prune_link=config.prune_link,
+                               first_masks=keep_masks
                                )
 
             # # 与之前98%比较（筛选占比）
@@ -406,7 +423,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             print_inf = print_mask_information(mb, logger)
 
         train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer,
-              iteration=iteration, lr_mode=lr_mode, num_classes=num_classes)
+              iteration=iteration, lr_mode=lr_mode, num_classes=num_classes, masks=keep_masks)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
         if lr_mode == 'cosine':
             lr_scheduler.step()
@@ -512,26 +529,16 @@ def main(config):
                               num_classes=classes[config.dataset],
                               samples_per_class=config.samples_per_class,
                               num_iters=config.get('num_iters', 1),
+                              single_data=config.single_data,
                               prune_mode=config.prune_mode,
                               prune_conv=config.prune_conv,
                               add_link=config.core_link,
                               delete_link=config.core_link,
                               enlarge=config.enlarge,
-                              prune_link=config.prune_link
+                              prune_link=config.prune_link,
+                              train_one=False
                               )
     # 用于分析两次剪枝的筛选情况
-    # masks_98 = Panning(mb.model, 0.98, trainloader, 'cuda',
-    #                 num_classes=classes[config.dataset],
-    #                 samples_per_class=config.samples_per_class,
-    #                 num_iters=config.get('num_iters', 1),
-    #                 reinit=False,
-    #                 prune_mode=config.prune_mode,
-    #                 prune_conv=config.prune_conv,
-    #                 add_link=config.core_link,
-    #                 delete_link=config.core_link,
-    #                 enlarge=config.enlarge,
-    #                 prune_link=config.prune_link
-    #                 )
     # # 与95%与98%比较（筛选占比）
     # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_98.values()]))
     # _and_mask_num = 0
@@ -575,6 +582,7 @@ def main(config):
                                    num_classes=classes[config.dataset],
                                    logger=logger,
                                    last_mask=masks_98,
+                                   keep_masks=masks,
                                    lr_mode=config.lr_mode
                                    )
 

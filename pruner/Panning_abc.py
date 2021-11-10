@@ -542,8 +542,7 @@ def Panning(net, ratio, train_dataloader, device,
         _get_connected_scores(f"Del", 1)
 
     # ============== debug ==============
-    debug = False
-    if debug or debug_mode > 0:
+    if debug_mode > 0:
         if debug_mode == 1:
             # 得到剪枝比例
             ratio_layer_a = []
