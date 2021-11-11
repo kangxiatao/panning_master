@@ -12,11 +12,10 @@ import json
 import math
 import os
 import sys
-import copy
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.autograd as autograd
 
 from models.model_base import ModelBase
 from tensorboardX import SummaryWriter
@@ -25,7 +24,7 @@ from models.base.init_utils import weights_init
 from utils.common_utils import (get_logger, makedirs, process_config, PresetLRScheduler, str_to_list)
 from utils.data_utils import get_dataloader
 from utils.network_utils import get_network
-from pruner.Panning_exp import Panning, GraSP_fetch_data
+from pruner.Panning_sim import Panning
 from utils import mail_log
 
 
@@ -34,9 +33,9 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
     parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
-    parser.add_argument('--run', type=str, default='exp123')
+    parser.add_argument('--run', type=str, default='expsim1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=5)
+    parser.add_argument('--prune_mode', type=int, default=2)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
@@ -44,9 +43,8 @@ def init_config():
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=0)  # 第二次修剪时间
-    parser.add_argument('--single_data', type=int, default=0)  # 单次修剪的数据方式
     parser.add_argument('--remain', type=float, default=666)
-    parser.add_argument('--lr_mode', type=str, default='cosine', help='cosine or preset')
+    parser.add_argument('--debug', type=int, default=0)  # 调试标记（打印数据和作图等）
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
     args = parser.parse_args()
 
@@ -67,9 +65,9 @@ def init_config():
     config.core_link = True if args.core_link == 1 else False
     config.enlarge = True if args.enlarge == 1 else False
     config.prune_link = True if args.prune_link == 1 else False
+    # config.debug = True if args.debug == 1 else False
     config.prune_epoch = args.prune_epoch
-    config.single_data = args.single_data
-    config.lr_mode = args.lr_mode
+    config.debug = args.debug
     config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
     config.send_mail_str = (mail_log.get_words() + '\n')
@@ -108,6 +106,71 @@ def print_mask_information(mb, logger):
     return re_str
 
 
+def count_FLOPs(mask, logger):
+    logger.info('** Pruned FLOPs:')
+    re_str = '** Pruned FLOPs:\n'
+    total_2d_num = 0
+    pruned_2d_num = 0
+    count = 0
+    for m, g in mask.items():
+        # 按通道或过滤器运算
+        if isinstance(m, nn.Conv2d):
+            # [n, c, k, k]
+            _shape = g.shape
+            n = _shape[0]
+            c = _shape[1]
+            _2d = np.sum(np.abs(g.cpu().detach().numpy()), axis=(2, 3))
+            _channel = np.sum(_2d, axis=0)
+            _filter = np.sum(_2d, axis=1)
+            _ci = np.count_nonzero(_channel == 0)
+            _co = np.count_nonzero(_filter == 0)
+
+            print('channel:', np.count_nonzero(_channel == 0))
+            print('filter:', np.count_nonzero(_filter == 0))
+
+            pruned_FLOPs = (_co * _ci) / (n * c)
+            total_2d_num += n * c
+            pruned_2d_num += _co * _ci
+
+            logger.info('  (%d) %s: %.2f%%' % (count, m, pruned_FLOPs * 100))
+            re_str += '  (%d) %.2f%%\n' % (count, pruned_FLOPs * 100)
+            count += 1
+
+        # 按卷积核运算
+        # if isinstance(m, nn.Conv2d):
+        #     # [n, c, k, k]
+        #     _shape = mask[m].shape
+        #     n = _shape[0]
+        #     c = _shape[1]
+        #     _2d = torch.sum(mask[m], dim=(2, 3))
+        #     _pruned_2d = torch.sum(torch.flatten(_2d == 0))
+        #     pruned_FLOPs = float(_pruned_2d) / (n * c)
+        #     total_2d_num += n * c
+        #     pruned_2d_num += _pruned_2d
+        #
+        #     logger.info('  (%d) %s: %.2f%%' % (count, m, pruned_FLOPs * 100))
+        #     re_str += '  (%d) %.2f%%\n' % (count, pruned_FLOPs * 100)
+        #     count += 1
+
+        # elif isinstance(m, nn.Linear):
+        #     # [c, n]
+        #     c = mask[m].shape[0]
+        #     n = mask[m].shape[1]
+        #     _pruned_w = torch.sum(torch.flatten(mask[m] == 0))
+        #     pruned_FLOPs = float(_pruned_w)/(n*c)
+        #     total_2d_num += n*c
+        #     pruned_2d_num += _pruned_w
+        #
+        #     logger.info('  (%d) %s: %.2f%%' % (count, m, pruned_FLOPs*100))
+        #     re_str += '  (%d) %.2f%%\n' % (count, pruned_FLOPs*100)
+        #     count += 1
+
+    logger.info('=> Overall Pruned FLOPs: %.2f%%' % (pruned_2d_num*100/total_2d_num))
+    re_str += '=> Overall Pruned FLOPs: %.2f%%\n' % (pruned_2d_num*100/total_2d_num)
+
+    return re_str
+
+
 def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
     print('Saving..')
     state = {
@@ -130,159 +193,17 @@ def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
                                                             config.depth))
 
 
-def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10, masks=None):
+def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
     correct = 0
     total = 0
 
-    desc = None
-    if lr_mode == 'cosine':
-        desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (lr_scheduler.get_last_lr(), 0, 0, correct, total))
-        writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_last_lr(), epoch)
-    elif 'preset' in lr_mode:
-        lr_scheduler(optimizer, epoch)
-        desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                (lr_scheduler.get_lr(optimizer), 0, 0, correct, total))
-        writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_lr(optimizer), epoch)
+    desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+            (lr_scheduler.get_last_lr(), 0, 0, correct, total))
 
-    # ------------- debug ----------------
-    # 分析梯度项一阶二阶的变化
-    # 求二阶不能这样
-    # grad_l2 = 0
-    # for idx, layer in enumerate(net.modules()):
-    #     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-    #         # print(layer.weight.grad.shape)
-    #         grad_l2 += layer.weight.grad.pow(2).sum()
-    # grad_l2.sqrt()
-
-    # 重新计算损失和建图，便于求一阶二阶导
-    weights = []
-    for layer in net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            weights.append(layer.weight)
-    for w in weights:
-        w.requires_grad_(True)
-
-    inputs_one = []
-    targets_one = []
-
-    grad_w = None  # 一阶梯度 g
-
-    # 10个类别，每类样本取10个
-    inputs, targets = GraSP_fetch_data(loader, num_classes, 10)
-    N = inputs.shape[0]
-    # 把数据分为前后两个list
-    din = copy.deepcopy(inputs)
-    dtarget = copy.deepcopy(targets)
-    inputs_one.append(din[:N // 2])
-    targets_one.append(dtarget[:N // 2])
-    inputs_one.append(din[N // 2:])
-    targets_one.append(dtarget[N // 2:])
-    inputs = inputs.cuda()
-    targets = targets.cuda()
-
-    outputs = net.forward(inputs[:N // 2])
-    loss = criterion(outputs, targets[:N // 2])
-    grad_w_p = autograd.grad(loss, weights)
-    grad_w = list(grad_w_p)
-
-    outputs = net.forward(inputs[N // 2:])
-    loss = criterion(outputs, targets[N // 2:])
-    grad_w_p = autograd.grad(loss, weights, create_graph=False)
-    for idx in range(len(grad_w)):
-        grad_w[idx] += grad_w_p[idx]
-
-    # layer_key
-    layer_key = [x for x in masks.keys()]
-
-    # 梯度范数的梯度
-    # 生气了，🤬
-    all_gral2 = 0  # g0 * g1 and g0 * g2
-    all_gl2 = 0  # g1 * g1 and g2 * g2
-    all_g1_g2 = 0  # 2 * g1 * g2
-
-    gr_l2 = 0
-    grasp_l2 = 0
-    last_grad_f = 0  # for debug
-    _grad_hg = None  # 二阶梯度 Hg
-    _grasp_hg = None  # 二阶梯度 Hg
-    lam_q = 1 / len(inputs_one)
-    for it in range(len(inputs_one)):
-        inputs = inputs_one.pop(0).cuda()
-        targets = targets_one.pop(0).cuda()
-        outputs = net.forward(inputs)
-        loss = criterion(outputs, targets)
-
-        # torch.autograd.grad() 对指定参数求导
-        # .torch.autograd.backward() 动态图所有参数的梯度都计算，叠加到 .grad 属性
-        grad_f = autograd.grad(loss, weights, create_graph=True)  # 一阶梯度 g
-        # print([torch.mean(g) for g in grad_f])
-        gr_l2 = 0
-        grasp_l2 = 0
-        g1_g2 = 0  # for debug
-        g1_g2_list = []  # for debug
-        # g1_g2_sim = 0  # for debug
-        g1_g2_sim_list = []  # for debug
-        count = 0
-        for layer in net.modules():
-            if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-                # grasp_l2 += (grad_w[count].data * grad_f[count]).sum()  # g0 * g1 and g0 * g2
-                grasp_l2 += (grad_w[count].data * grad_f[count] * masks[layer_key[count]]).sum()  # g0 * g1 and g0 * g2
-                # gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
-                gr_l2 += ((grad_f[count] * masks[layer_key[count]]).pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
-                if it % 2 == 1:
-                    layer_g1g2 = (grad_f[count] * last_grad_f[count] * masks[layer_key[count]]).sum()  # g1 * g2
-                    g1_g2 += layer_g1g2
-                    g1_g2_list.append(layer_g1g2)
-                    # g1_g2_sim += (grad_f[count] * last_grad_f[count]).sum() / (grad_f[count].pow(2).sum().sqrt()*last_grad_f[count].pow(2).sum().sqrt())
-                    g1_g2_sim_list.append(layer_g1g2 / ((grad_f[count]*masks[layer_key[count]]).pow(2).sum().sqrt()*(last_grad_f[count]*masks[layer_key[count]]).pow(2).sum().sqrt()))
-                count += 1
-
-        if it % 2 == 0:
-            last_grad_f = grad_f
-        all_gral2 += grasp_l2
-        all_gl2 += gr_l2
-        # print(grasp_l2, 2*gr_l2, 2*g1_g2)
-
-        # gr_l2.sqrt()
-        # if _grad_hg is None:
-        #     _grad_hg = autograd.grad(gr_l2, weights, retain_graph=True)
-        # else:
-        #     _grad_hg = [_grad_hg[i] + autograd.grad(gr_l2, weights, retain_graph=True)[i] for i in range(len(_grad_hg))]
-        #
-        # if _grasp_hg is None:
-        #     _grasp_hg = autograd.grad(grasp_l2, weights, retain_graph=True)
-        # else:
-        #     _grasp_hg = [_grasp_hg[i] + autograd.grad(grasp_l2, weights, retain_graph=True)[i] for i in range(len(_grasp_hg))]
-
-    # ghg = 0  # 二阶项
-    # for i in range(len(grad_w)):
-    #     ghg += (grad_w[i]*_grad_hg[i]).sum()
-    # ghg.sqrt()
-
-    # 计算GraSP and GL2 的差值绝对值和
-    # _layer_cnt = 0
-    # _diff_sum = 0
-    # _grasp_mean = 0
-    # _grasp_sum = 0
-    # for idx, layer in enumerate(net.modules()):
-    #     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-    #         x = -layer.weight.data * _grasp_hg[_layer_cnt]  # -theta_q Hg
-    #         q = -layer.weight.data * _grad_hg[_layer_cnt]  # -theta_q Hg
-    #         # print(torch.mean(x), torch.sum(x))
-    #         # print(torch.mean(l), torch.sum(l))
-    #         # print(torch.mean(x))
-    #         # print(torch.mean(q))
-    #         # print('-'*10)
-    #         _diff_sum += float(torch.sum(torch.abs(x-q)))
-    #         _grasp_mean += float(torch.mean(x))
-    #         _grasp_sum += float(torch.sum(x))
-    #         _layer_cnt += 1
-    # print('-'*20)
-    # ------------------------------
+    writer.add_scalar('iter_%d/train/lr' % iteration, lr_scheduler.get_last_lr(), epoch)
 
     prog_bar = tqdm(enumerate(loader), total=len(loader), desc=desc, leave=True)
     for batch_idx, (inputs, targets) in prog_bar:
@@ -299,29 +220,12 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        if lr_mode == 'cosine':
-            desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (lr_scheduler.get_last_lr(), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
-        elif 'preset' in lr_mode:
-            desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (lr_scheduler.get_lr(optimizer), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+        desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                (lr_scheduler.get_last_lr(), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
         prog_bar.set_description(desc, refresh=True)
 
     writer.add_scalar('iter_%d/train/loss' % iteration, train_loss / (batch_idx + 1), epoch)
     writer.add_scalar('iter_%d/train/acc' % iteration, 100. * correct / total, epoch)
-
-    writer.add_scalar('iter_%d/train/gral2' % iteration, all_gral2, epoch)
-    writer.add_scalar('iter_%d/train/gl2' % iteration, all_gl2, epoch)
-    writer.add_scalar('iter_%d/train/g1_g2' % iteration, g1_g2, epoch)
-    writer.add_scalar('iter_%d/train/g1g2_conv' % iteration, g1_g2_list[15], epoch)
-    writer.add_scalar('iter_%d/train/g1g2_line' % iteration, g1_g2_list[16], epoch)
-    writer.add_scalar('iter_%d/train/sim_conv' % iteration, g1_g2_sim_list[15], epoch)
-    writer.add_scalar('iter_%d/train/sim_line' % iteration, g1_g2_sim_list[16], epoch)
-    # writer.add_scalar('iter_%d/train/g1_g2_sim' % iteration, g1_g2_sim, epoch)
-    # writer.add_scalar('iter_%d/train/ghg' % iteration, ghg, epoch)
-    # writer.add_scalar('iter_%d/train/_diff_sum' % iteration, _diff_sum, epoch)
-    # writer.add_scalar('iter_%d/train/_grasp_mean' % iteration, _grasp_mean, epoch)
-    # writer.add_scalar('iter_%d/train/_grasp_sum' % iteration, _grasp_sum, epoch)
 
 
 def test(net, loader, criterion, epoch, writer, iteration):
@@ -357,76 +261,19 @@ def test(net, loader, criterion, epoch, writer, iteration):
 
 
 def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, learning_rate, weight_decay, num_epochs,
-               iteration, ratio, num_classes, logger, last_mask, keep_masks=None, lr_mode='cosine'):
+               iteration, ratio, num_classes, logger, prune_masks=None):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
-    lr_scheduler = None
-    if lr_mode == 'cosine':
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
-    elif 'preset' in lr_mode:
-        if lr_mode == 'preset_01':
-            lr_schedule = {0: learning_rate * 0.01,
-                           int(num_epochs * 0.5): learning_rate * 0.01,
-                           int(num_epochs * 0.75): learning_rate * 0.01}
-        else:
-            lr_schedule = {0: learning_rate,
-                           int(num_epochs * 0.5): learning_rate * 0.1,
-                           int(num_epochs * 0.75): learning_rate * 0.01}
-        lr_scheduler = PresetLRScheduler(lr_schedule)
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     print_inf = ''
     best_acc = 0
     best_epoch = 0
     for epoch in range(num_epochs):
 
-        # 淘金
-        if epoch == config.prune_epoch and config.prune_mode_pa > 0:
-            masks, _ = Panning(mb.model, ratio, trainloader, 'cuda',
-                               num_classes=num_classes,
-                               samples_per_class=config.samples_per_class,
-                               num_iters=config.get('num_iters', 1),
-                               reinit=False,
-                               prune_mode=config.prune_mode_pa,
-                               prune_conv=config.prune_conv_pa,
-                               add_link=config.core_link,
-                               delete_link=config.core_link,
-                               enlarge=config.enlarge,
-                               prune_link=config.prune_link,
-                               first_masks=keep_masks
-                               )
-
-            # # 与之前98%比较（筛选占比）
-            # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in last_mask.values()]))
-            # _and_mask_num = 0
-            # _la_cnt = 0
-            # for m, g in masks.items():
-            #     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-            #         and_mask = masks[m] * last_mask[m]
-            #         _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
-            #         _last_mask_num = torch.sum(torch.cat([torch.flatten(last_mask[m] == 1)]))
-            #         print(_la_cnt, '-' * 20)
-            #         # print(f'_now_mask_num: {_now_mask_num}')
-            #         # print(f'_last_mask_num: {_last_mask_num}')
-            #         print(f'/: {1 - _now_mask_num / _last_mask_num}')
-            #         _and_mask_num += _now_mask_num
-            #         _la_cnt += 1
-            # print('all', '-' * 20)
-            # # print(f'_all_mask_num: {_all_mask_num}')
-            # # print(f'_and_mask_num: {_and_mask_num}')
-            # print(f'/: {1 - _and_mask_num / _all_mask_num}')
-
-            # print(masks)
-            # ========== register mask ==================
-            mb.register_mask(masks)
-            # ========== print pruning details ============
-            logger.info('**[%d] Mask and training setting: ' % iteration)
-            print_inf = print_mask_information(mb, logger)
-
-        train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer,
-              iteration=iteration, lr_mode=lr_mode, num_classes=num_classes, masks=keep_masks)
+        train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer, iteration=iteration)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
-        if lr_mode == 'cosine':
-            lr_scheduler.step()
+        lr_scheduler.step()
 
         if test_acc > best_acc and epoch > 10:
             print('Saving..')
@@ -525,42 +372,26 @@ def main(config):
     # pre_ratio = ratio
     mb.model.apply(weights_init)
     print("=> Applying weight initialization(%s)." % config.get('init_method', 'kaiming'))
-    masks, masks_98 = Panning(mb.model, pre_ratio, trainloader, 'cuda',
-                              num_classes=classes[config.dataset],
-                              samples_per_class=config.samples_per_class,
-                              num_iters=config.get('num_iters', 1),
-                              single_data=config.single_data,
-                              prune_mode=config.prune_mode,
-                              prune_conv=config.prune_conv,
-                              add_link=config.core_link,
-                              delete_link=config.core_link,
-                              enlarge=config.enlarge,
-                              prune_link=config.prune_link,
-                              train_one=False
-                              )
-    # 用于分析两次剪枝的筛选情况
-    # # 与95%与98%比较（筛选占比）
-    # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_98.values()]))
-    # _and_mask_num = 0
-    # for m, g in masks.items():
-    #     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-    #         and_mask = masks[m] * masks_98[m]
-    #         _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
-    #         _last_mask_num = torch.sum(torch.cat([torch.flatten(masks_98[m] == 1)]))
-    #         print('-' * 20)
-    #         print(f'_now_mask_num: {_now_mask_num}')
-    #         print(f'_last_mask_num: {_last_mask_num}')
-    #         print(f'/: {1 - _now_mask_num / _last_mask_num}')
-    #         _and_mask_num += _now_mask_num
-    # print(f'_all_mask_num: {_all_mask_num}')
-    # print(f'_and_mask_num: {_and_mask_num}')
-    # print(f'/: {1 - _and_mask_num / _all_mask_num}')
-
+    masks = Panning(mb.model, pre_ratio, trainloader, 'cuda',
+                    num_classes=classes[config.dataset],
+                    samples_per_class=config.samples_per_class,
+                    num_iters=config.get('num_iters', 1),
+                    prune_mode=config.prune_mode,
+                    prune_conv=config.prune_conv,
+                    add_link=config.core_link,
+                    delete_link=config.core_link,
+                    enlarge=config.enlarge,
+                    prune_link=config.prune_link,
+                    debug_mode=config.debug,
+                    debug_path=config.summary_dir
+                    )
     # ========== register mask ==================
     mb.register_mask(masks)
     # ========== print pruning details ============
     print_inf = print_mask_information(mb, logger)
     config.send_mail_str += print_inf
+    # print_inf = count_FLOPs(masks, logger)
+    # config.send_mail_str += print_inf
     logger.info('  LR: %.5f, WD: %.5f, Epochs: %d' %
                 (learning_rates[iteration], weight_decays[iteration], training_epochs[iteration]))
     config.send_mail_str += 'LR: %.5f, WD: %.5f, Epochs: %d, Batch: %d \n' % (
@@ -581,9 +412,7 @@ def main(config):
                                    ratio=ratio,
                                    num_classes=classes[config.dataset],
                                    logger=logger,
-                                   last_mask=masks_98,
-                                   keep_masks=masks,
-                                   lr_mode=config.lr_mode
+                                   prune_masks=masks
                                    )
 
     config.send_mail_str += print_inf

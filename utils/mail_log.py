@@ -57,6 +57,7 @@ def get_words():
         # print(res[0])
 
     except:
+        res = ['Wubba lubba dub dub', 'haha']
         print(res[0])
 
     return res[0]

@@ -9,11 +9,9 @@ def get_transforms(dataset):
     if dataset == 'mnist':
         # transforms.Normalize((0.1307,), (0.3081,))
         t = transforms.Normalize((0.5,), (0.5,))
-        transform_train = transforms.Compose([transforms.ToTensor(),t
-                                              ])
+        transform_train = transforms.Compose([transforms.ToTensor(), t])
 
-        transform_test = transforms.Compose([transforms.ToTensor(),
-                                             t])
+        transform_test = transforms.Compose([transforms.ToTensor(), t])
 
     if dataset == 'cifar10':
         transform_train = transforms.Compose([
@@ -76,12 +74,15 @@ def get_dataloader(dataset, train_batch_size, test_batch_size, num_workers=2, ro
     transform_train, transform_test = get_transforms(dataset)
     trainset, testset = None, None
     if dataset == 'mnist':
-        trainset = torchvision.datasets.MNIST(root=root + '/mnist', train=True, download=True, transform=transform_train)
+        trainset = torchvision.datasets.MNIST(root=root + '/mnist', train=True, download=True,
+                                              transform=transform_train)
         testset = torchvision.datasets.MNIST(root=root + '/mnist', train=False, download=True, transform=transform_test)
 
     if dataset == 'cifar10':
-        trainset = torchvision.datasets.CIFAR10(root=root + '/cifar-10-python', train=True, download=True, transform=transform_train)
-        testset = torchvision.datasets.CIFAR10(root=root + '/cifar-10-python', train=False, download=True, transform=transform_test)
+        trainset = torchvision.datasets.CIFAR10(root=root + '/cifar-10-python', train=True, download=True,
+                                                transform=transform_train)
+        testset = torchvision.datasets.CIFAR10(root=root + '/cifar-10-python', train=False, download=True,
+                                               transform=transform_test)
 
     if dataset == 'cifar100':
         trainset = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=transform_train)

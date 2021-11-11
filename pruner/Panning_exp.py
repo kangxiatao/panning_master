@@ -140,8 +140,8 @@ def Panning(net, ratio, train_dataloader, device,
 
     # 梯度范数的梯度
     # all_g1g2 = 0  # g1 * g1 and g2 * g2
-    # last_grad_f = 0  # for g1 g2
-    # grad_diff = None
+    last_grad_f = 0  # for g1 g2
+    grad_diff = None
     grad_l2 = None
     lam_q = 1 / len(inputs_one)
     for it in range(len(inputs_one)):
@@ -156,7 +156,7 @@ def Panning(net, ratio, train_dataloader, device,
         loss = F.cross_entropy(outputs, targets)
 
         gr_l2 = 0
-        # g1_g2 = 0
+        g1_g2 = 0
         # torch.autograd.grad() 对指定参数求导
         # .torch.autograd.backward() 动态图所有参数的梯度都计算，叠加到 .grad 属性
         grad_f = autograd.grad(loss, weights, create_graph=True)
@@ -168,24 +168,24 @@ def Panning(net, ratio, train_dataloader, device,
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
                 z += (grad_w[count].data * grad_f[count]).sum()
                 gr_l2 += torch.sum(grad_f[count].pow(2)) * lam_q
-                # if it % 2 == 1:
-                #     g1_g2 += torch.sum(grad_f[count] * last_grad_f[count])  # g1 * g2
+                if it % 2 == 1:
+                    g1_g2 += torch.sum(grad_f[count] * last_grad_f[count])  # g1 * g2
                 # 梯度差异debug
                 # print(torch.mean(grad_w[count].data), torch.mean(grad_f[count]))
                 # print(torch.mean(grad_w_p[count]), torch.mean(grad_f[count]))
                 count += 1
         z.backward(retain_graph=True)
-        # if it % 2 == 0:
-        #     last_grad_f = grad_f
+        if it % 2 == 0:
+            last_grad_f = grad_f
         if grad_l2 is None:
             grad_l2 = autograd.grad(gr_l2, weights, retain_graph=True)
         else:
             grad_l2 = [grad_l2[i] + autograd.grad(gr_l2, weights, retain_graph=True)[i] for i in range(len(grad_l2))]
-        # if it % 2 == 1:
-        #     if grad_diff is None:
-        #         grad_diff = autograd.grad(g1_g2, weights, retain_graph=True)
-        #     else:
-        #         grad_diff = [grad_diff[i] + autograd.grad(g1_g2, weights, retain_graph=True)[i] for i in range(len(grad_diff))]
+        if it % 2 == 1:
+            if grad_diff is None:
+                grad_diff = autograd.grad(g1_g2, weights, retain_graph=True)
+            else:
+                grad_diff = [grad_diff[i] + autograd.grad(g1_g2, weights, retain_graph=True)[i] for i in range(len(grad_diff))]
 
         # print(torch.mean(z), torch.mean(gr_l2))
 
@@ -217,7 +217,7 @@ def Panning(net, ratio, train_dataloader, device,
             p = -layer.weight.data * layer.weight.grad  # -theta_q Hg
             l = -layer.weight.data * grad_l2[layer_cnt]  # -theta_q grad_l2
             s = -torch.abs(layer.weight.data * grad_w[layer_cnt])  # -theta_q grad_w
-            # d = layer.weight.data * grad_diff[layer_cnt]  # theta_q grad_diff  d = x - q
+            d = layer.weight.data * grad_diff[layer_cnt]  # theta_q grad_diff  d = x - q
 
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
@@ -306,7 +306,8 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 4:  # gl2_diff
                 x = p - l
             if prune_mode == 5:  # gl2_diff
-                x = -torch.abs(l - p)
+                # x = -torch.abs(l - p)
+                x = -torch.abs(d)
             if prune_mode == 6:  # ratio_layer
                 x = -torch.abs(l - p)
             if prune_mode == 7:  # abs_gra
@@ -1063,7 +1064,7 @@ def Panning(net, ratio, train_dataloader, device,
         correct = 0
         total = 0
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
+        optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
         for it in range(len(inputs_one)):
             inputs = inputs_one[it].to(device)
