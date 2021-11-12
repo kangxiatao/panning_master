@@ -83,10 +83,10 @@ def Panning(net, ratio, train_dataloader, device,
 
     # -------- 这部分为直接求解，显存爆了 --------
     print("fetch data")
-    samples_per_class = 15
+    samples_per_class = 10
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
     N = inputs.shape[0]
-    equal_parts = N // 3
+    equal_parts = N // 1
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
@@ -119,16 +119,19 @@ def Panning(net, ratio, train_dataloader, device,
     print('Loss: %.3f | Acc: %.3f%% (%d/%d)' % (train_loss, 100. * correct / total, correct, total))
 
     # 第二次推断
-    weights.clear()
+    weights_v2 = []
     for layer in net.modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            weights.append(layer.weight)
-    for w in weights:
+            weights_v2.append(layer.weight)
+    for w in weights_v2:
         w.requires_grad_(True)
     print("gradient => g")
-    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    grad_b = autograd.grad(loss_b, weights, create_graph=True)
+    # outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
+    # loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
+    # grad_b = autograd.grad(loss_b, weights_v2, create_graph=True)
+    outputs = net.forward(inputs) / T
+    loss_b = F.cross_entropy(outputs, targets)
+    grad_b = autograd.grad(loss_b, weights_v2, create_graph=True)
     print("gradient of norm gradient =》 Hg")
     gbb = 0
     _layer = 0
@@ -137,13 +140,22 @@ def Panning(net, ratio, train_dataloader, device,
             gbb += grad_b[_layer].pow(2).sum()  # gb * gb
             _layer += 1
     print(gaa, gbb)
-    grad_bb = autograd.grad(gbb, weights, retain_graph=True)
+    grad_bb = autograd.grad(gbb, weights_v2, retain_graph=True)
+
+    # 重置w
+    weights.clear()
+    for layer in old_net.modules():
+        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+            weights.append(layer.weight)
 
     # === 剪枝部分 ===
     """
         prune_mode:
-            1 - 差值
-            2 - 差值绝对值
+            1 - 差值最大
+            2 - 差值最小
+            3 - 差值绝对值
+            4 - 差值归一化
+            5 - 。。。
     """
 
     # === 计算分值 ===
@@ -158,13 +170,16 @@ def Panning(net, ratio, train_dataloader, device,
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            a = layer.weight.data * grad_aa[layer_cnt]  # theta_q grad_aa
+            a = weights[layer_cnt] * grad_aa[layer_cnt]  # theta_q grad_aa
             b = layer.weight.data * grad_bb[layer_cnt]  # theta_q grad_bb
             # print(torch.mean(a), torch.sum(a))
             # print(torch.mean(b), torch.sum(b))
+            # print(torch.mean(weights[layer_cnt]), torch.sum(weights[layer_cnt]))
+            # print(torch.mean(layer.weight.data), torch.sum(layer.weight.data))
             # print('-' * 20)
+            # print('0:', torch.sum(torch.cat([torch.flatten(layer.weight.data == 0)])))
 
-            x = a - b
+            x = a
             if prune_mode == 1:
                 x = a - b
             if prune_mode == 2:
@@ -172,9 +187,13 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 3:
                 x = torch.abs(a - b)
             if prune_mode == 4:
-                # x = torch.abs(a + b)  # 层崩塌
-                pass
+                x = torch.div(torch.abs(a - b), torch.abs(a) + torch.abs(b))
+                x = torch.where(torch.isnan(x), torch.full_like(x, 0), x)
+                x = torch.where(x == 1, torch.full_like(x, 0), x)
+            if prune_mode == 5:
+                x = torch.abs(a - b) * (torch.abs(a) + torch.abs(b))
 
+            print(torch.max(torch.abs(x)))
             if prune_conv:
                 # 卷积根据设定剪枝率按卷积核保留
                 if isinstance(layer, nn.Conv2d):

@@ -66,7 +66,7 @@ def count_fc_parameters(net):
 def Panning(net, ratio, train_dataloader, device,
             num_classes=10, samples_per_class=25, num_iters=1, T=200, reinit=True, single_data=0,
             prune_mode=3, prune_conv=False, add_link=False, delete_link=False, delete_conv=False, enlarge=False,
-            prune_link=False, first_masks=None, train_one=False):
+            prune_link=False, first_masks=None, first_data=None, train_one=False):
     eps = 1e-10
     # print(f'ratio:{ratio}')
     keep_ratio = (1 - ratio)
@@ -99,44 +99,72 @@ def Panning(net, ratio, train_dataloader, device,
     for w in weights:
         w.requires_grad_(True)
 
-    for it in range(num_iters):
-        print("(1): Iterations %d/%d." % (it, num_iters))
-        # num_classes 个样本，每类样本取 samples_per_class 个
-        inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class, single_data)
-        N = inputs.shape[0]
-        # 把数据分为前后两个list
-        din = copy.deepcopy(inputs)
-        dtarget = copy.deepcopy(targets)
-        inputs_one.append(din[:N // 2])
-        targets_one.append(dtarget[:N // 2])
-        inputs_one.append(din[N // 2:])
-        targets_one.append(dtarget[N // 2:])
-        inputs = inputs.to(device)
-        targets = targets.to(device)
-        outputs = net.forward(inputs[:N // 2]) / T
-        loss = F.cross_entropy(outputs, targets[:N // 2])
-        grad_w_p = autograd.grad(loss, weights)
-        if first_masks:  # 去除零值梯度
-            grad_w_p = [x*first_masks[layer_key[i]] for i, x in enumerate(grad_w_p)]
-        if grad_w is None:
-            grad_w = list(grad_w_p)
-        else:
-            for idx in range(len(grad_w)):
-                grad_w[idx] += grad_w_p[idx]
+    if first_data is None:
+        for it in range(num_iters):
+            print("(1): Iterations %d/%d." % (it, num_iters))
+            # num_classes 个样本，每类样本取 samples_per_class 个
+            inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class, single_data)
+            N = inputs.shape[0]
+            # 把数据分为前后两个list
+            din = copy.deepcopy(inputs)
+            dtarget = copy.deepcopy(targets)
+            inputs_one.append(din[:N // 2])
+            targets_one.append(dtarget[:N // 2])
+            inputs_one.append(din[N // 2:])
+            targets_one.append(dtarget[N // 2:])
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            outputs = net.forward(inputs[:N // 2]) / T
+            loss = F.cross_entropy(outputs, targets[:N // 2])
+            grad_w_p = autograd.grad(loss, weights)
+            if first_masks:  # 去除零值梯度
+                grad_w_p = [x*first_masks[layer_key[i]] for i, x in enumerate(grad_w_p)]
+            if grad_w is None:
+                grad_w = list(grad_w_p)
+            else:
+                for idx in range(len(grad_w)):
+                    grad_w[idx] += grad_w_p[idx]
 
-        outputs = net.forward(inputs[N // 2:]) / T
-        loss = F.cross_entropy(outputs, targets[N // 2:])
-        grad_w_p = autograd.grad(loss, weights, create_graph=False)
-        if first_masks:  # 去除零值梯度
-            grad_w_p = [x*first_masks[layer_key[i]] for i, x in enumerate(grad_w_p)]
-        if grad_w is None:
-            grad_w = list(grad_w_p)
-        else:
-            for idx in range(len(grad_w)):
-                grad_w[idx] += grad_w_p[idx]
+            outputs = net.forward(inputs[N // 2:]) / T
+            loss = F.cross_entropy(outputs, targets[N // 2:])
+            grad_w_p = autograd.grad(loss, weights, create_graph=False)
+            if first_masks:  # 去除零值梯度
+                grad_w_p = [x*first_masks[layer_key[i]] for i, x in enumerate(grad_w_p)]
+            if grad_w is None:
+                grad_w = list(grad_w_p)
+            else:
+                for idx in range(len(grad_w)):
+                    grad_w[idx] += grad_w_p[idx]
+    else:
+        for it in range(num_iters):
+            print("(1): Iterations %d/%d." % (it, num_iters))
+            # num_classes 个样本，每类样本取 samples_per_class 个
+            inputs_one, targets_one = first_data
+            inputs = inputs_one[it].to(device)
+            targets = targets_one[it].to(device)
+            outputs = net.forward(inputs) / T
+            loss = F.cross_entropy(outputs, targets)
+            grad_w_p = autograd.grad(loss, weights)
+            if first_masks:  # 去除零值梯度
+                grad_w_p = [x * first_masks[layer_key[i]] for i, x in enumerate(grad_w_p)]
+            if grad_w is None:
+                grad_w = list(grad_w_p)
+            else:
+                for idx in range(len(grad_w)):
+                    grad_w[idx] += grad_w_p[idx]
 
-    ret_inputs = []
-    ret_targets = []
+            inputs = inputs_one[it+1].to(device)
+            targets = targets_one[it+1].to(device)
+            outputs = net.forward(inputs) / T
+            loss = F.cross_entropy(outputs, targets)
+            grad_w_p = autograd.grad(loss, weights, create_graph=False)
+            if first_masks:  # 去除零值梯度
+                grad_w_p = [x * first_masks[layer_key[i]] for i, x in enumerate(grad_w_p)]
+            if grad_w is None:
+                grad_w = list(grad_w_p)
+            else:
+                for idx in range(len(grad_w)):
+                    grad_w[idx] += grad_w_p[idx]
 
     # 梯度范数的梯度
     # all_g1g2 = 0  # g1 * g1 and g2 * g2
@@ -150,8 +178,6 @@ def Panning(net, ratio, train_dataloader, device,
         # targets = targets_one.pop(0).to(device)
         inputs = inputs_one[it].to(device)
         targets = targets_one[it].to(device)
-        ret_inputs.append(inputs)
-        ret_targets.append(targets)
         outputs = net.forward(inputs) / T
         loss = F.cross_entropy(outputs, targets)
 
@@ -1009,53 +1035,53 @@ def Panning(net, ratio, train_dataloader, device,
     # plt.colorbar()
     # plt.show()
 
-    # # 热力图2号，gra横坐标，snip纵坐标，卷积核
-    # import matplotlib.pyplot as plt
-    # plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-    # plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-    # plt.figure(1)
-    #
-    # _layer_len = 0
+    # 热力图2号，gra横坐标，snip纵坐标，卷积核
+    import matplotlib.pyplot as plt
+    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+    plt.figure(1)
+
+    _layer_len = 0
+    for _layer, _key in enumerate(grad_key):
+        if isinstance(_key, nn.Conv2d):
+            _layer_len += 1
+    # print(f'_layer_len: {_layer_len}')
+
+    # 按层显示
     # for _layer, _key in enumerate(grad_key):
     #     if isinstance(_key, nn.Conv2d):
-    #         _layer_len += 1
-    # # print(f'_layer_len: {_layer_len}')
-    #
-    # # 按层显示
-    # # for _layer, _key in enumerate(grad_key):
-    # #     if isinstance(_key, nn.Conv2d):
-    # #         gra = torch.cat([torch.flatten(torch.mean(grads_x[grad_key[_layer]], dim=(2, 3)))])
-    # #         snip = (-1)*torch.cat([torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
-    # #         np_gra = gra.cpu().detach().numpy()
-    # #         np_snip = snip.cpu().detach().numpy()
-    # #         plt.subplot(math.ceil((math.sqrt(_layer_len))), math.ceil((math.sqrt(_layer_len))), _layer + 1)
-    # #         plt.scatter(np_gra, np_snip, s=1, alpha=0.3, cmap='rainbow')
-    #
-    # # 整个网络
-    # gra = None
-    # snip = None
-    # for _layer, _key in enumerate(grad_key):
-    #     if isinstance(_key, nn.Conv2d):
-    #         if gra is None:
-    #             gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3)))])
-    #             snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
-    #         else:
-    #             gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3))), gra])
-    #             snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3))), snip])
-    # np_gra = -gra.cpu().detach().numpy()
-    # np_snip = snip.cpu().detach().numpy()
-    # # gra_index = np.argsort(-np_gra)  # 降序
-    # # gra_len = len(np_gra)
-    # # gra_02_ind = gra_index[int(gra_len * 0.02)]
-    # # gra_05_ind = gra_index[int(gra_len * 0.05)]
-    # # gra_10_ind = gra_index[int(gra_len * 0.1)]
-    # # plt.axvline(np_gra[gra_02_ind], color='red', linestyle=':')
-    # # plt.axvline(np_gra[gra_05_ind], color='green', linestyle=':')
-    # # plt.axvline(np_gra[gra_10_ind], color='blue', linestyle=':')
-    # plt.scatter(np_gra, np_snip, s=1, alpha=0.3, color='coral')
-    # # plt.scatter(np_gra, np_snip, s=1, c=np.abs(np_gra*np_snip), cmap = plt.cm.plasma)
-    #
-    # plt.show()
+    #         gra = torch.cat([torch.flatten(torch.mean(grads_x[grad_key[_layer]], dim=(2, 3)))])
+    #         snip = (-1)*torch.cat([torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
+    #         np_gra = gra.cpu().detach().numpy()
+    #         np_snip = snip.cpu().detach().numpy()
+    #         plt.subplot(math.ceil((math.sqrt(_layer_len))), math.ceil((math.sqrt(_layer_len))), _layer + 1)
+    #         plt.scatter(np_gra, np_snip, s=1, alpha=0.3, cmap='rainbow')
+
+    # 整个网络
+    gra = None
+    snip = None
+    for _layer, _key in enumerate(grad_key):
+        if isinstance(_key, nn.Conv2d):
+            if gra is None:
+                gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3)))])
+                snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
+            else:
+                gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3))), gra])
+                snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3))), snip])
+    np_gra = -gra.cpu().detach().numpy()
+    np_snip = snip.cpu().detach().numpy()
+    # gra_index = np.argsort(-np_gra)  # 降序
+    # gra_len = len(np_gra)
+    # gra_02_ind = gra_index[int(gra_len * 0.02)]
+    # gra_05_ind = gra_index[int(gra_len * 0.05)]
+    # gra_10_ind = gra_index[int(gra_len * 0.1)]
+    # plt.axvline(np_gra[gra_02_ind], color='red', linestyle=':')
+    # plt.axvline(np_gra[gra_05_ind], color='green', linestyle=':')
+    # plt.axvline(np_gra[gra_10_ind], color='blue', linestyle=':')
+    plt.scatter(np_gra, np_snip, s=1, alpha=0.3, color='coral')
+    # plt.scatter(np_gra, np_snip, s=1, c=np.abs(np_gra*np_snip), cmap = plt.cm.plasma)
+
+    plt.show()
 
     # 最后完成训练
     if train_one:
@@ -1085,5 +1111,10 @@ def Panning(net, ratio, train_dataloader, device,
                     (train_loss / (it + 1), 100. * correct / total, correct, total))
             print(desc)
 
+    # if first_data is None:
+    #     Panning(net, ratio, train_dataloader, device,
+    #             num_classes, samples_per_class, num_iters, T, reinit, single_data,
+    #             prune_mode, prune_conv, add_link, delete_link, delete_conv, enlarge,
+    #             prune_link, first_masks, first_data=(inputs_one, targets_one), train_one=False)
 
-    return keep_masks, keep_masks_98
+    return keep_masks, keep_masks_98, (inputs_one, targets_one)
