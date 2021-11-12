@@ -100,7 +100,7 @@ def Panning(net, ratio, train_dataloader, device,
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
             gaa += grad_a[_layer].pow(2).sum()  # ga * ga
             _layer += 1
-    grad_aa = autograd.grad(gaa, weights, retain_graph=True)
+    grad_aa = autograd.grad(gaa, weights)
     # 更新参数
     net.train()
     criterion = nn.CrossEntropyLoss()
@@ -140,7 +140,7 @@ def Panning(net, ratio, train_dataloader, device,
             gbb += grad_b[_layer].pow(2).sum()  # gb * gb
             _layer += 1
     print(gaa, gbb)
-    grad_bb = autograd.grad(gbb, weights_v2, retain_graph=True)
+    grad_bb = autograd.grad(gbb, weights_v2)
 
     # 重置w
     weights.clear()
