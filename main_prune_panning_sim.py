@@ -35,8 +35,9 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='expsim1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=3)
+    parser.add_argument('--prune_mode', type=int, default=5)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
+    parser.add_argument('--data_mode', type=int, default=1)  # 数据模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
@@ -60,6 +61,7 @@ def init_config():
         print("set new target_ratio:{}".format(config.target_ratio))
     config.prune_mode = args.prune_mode
     config.prune_mode_pa = args.prune_mode_pa
+    config.data_mode = args.data_mode
     config.prune_conv = True if args.prune_conv == 1 else False
     config.prune_conv_pa = True if args.prune_conv_pa == 1 else False
     config.core_link = True if args.core_link == 1 else False
@@ -377,6 +379,7 @@ def main(config):
                     samples_per_class=config.samples_per_class,
                     num_iters=config.get('num_iters', 1),
                     prune_mode=config.prune_mode,
+                    data_mode=config.data_mode,
                     prune_conv=config.prune_conv,
                     add_link=config.core_link,
                     delete_link=config.core_link,

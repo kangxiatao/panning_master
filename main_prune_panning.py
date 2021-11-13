@@ -390,22 +390,23 @@ def main(config):
     # pre_ratio = ratio
     mb.model.apply(weights_init)
     print("=> Applying weight initialization(%s)." % config.get('init_method', 'kaiming'))
-    masks = Panning(mb.model, pre_ratio, trainloader, 'cuda',
-                    num_classes=classes[config.dataset],
-                    samples_per_class=config.samples_per_class,
-                    num_iters=config.get('num_iters', 1),
-                    prune_mode=config.prune_mode,
-                    prune_conv=config.prune_conv,
-                    add_link=config.core_link,
-                    delete_link=config.core_link,
-                    enlarge=config.enlarge,
-                    prune_link=config.prune_link
-                    )
-    # ========== register mask ==================
-    mb.register_mask(masks)
-    # ========== print pruning details ============
-    print_inf = print_mask_information(mb, logger)
-    config.send_mail_str += print_inf
+    if config.prune_mode > 0:
+        masks = Panning(mb.model, pre_ratio, trainloader, 'cuda',
+                        num_classes=classes[config.dataset],
+                        samples_per_class=config.samples_per_class,
+                        num_iters=config.get('num_iters', 1),
+                        prune_mode=config.prune_mode,
+                        prune_conv=config.prune_conv,
+                        add_link=config.core_link,
+                        delete_link=config.core_link,
+                        enlarge=config.enlarge,
+                        prune_link=config.prune_link
+                        )
+        # ========== register mask ==================
+        mb.register_mask(masks)
+        # ========== print pruning details ============
+        print_inf = print_mask_information(mb, logger)
+        config.send_mail_str += print_inf
     # print_inf = count_FLOPs(masks, logger)
     # config.send_mail_str += print_inf
     logger.info('  LR: %.5f, WD: %.5f, Epochs: %d' %

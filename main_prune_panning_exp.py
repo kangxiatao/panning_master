@@ -130,7 +130,8 @@ def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
                                                             config.depth))
 
 
-def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10, masks=None):
+def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10,
+          masks=None):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
@@ -232,13 +233,15 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
                 # grasp_l2 += (grad_w[count].data * grad_f[count]).sum()  # g0 * g1 and g0 * g2
                 grasp_l2 += (grad_w[count].data * grad_f[count] * masks[layer_key[count]]).sum()  # g0 * g1 and g0 * g2
                 # gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
-                gr_l2 += ((grad_f[count] * masks[layer_key[count]]).pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
+                gr_l2 += ((grad_f[count] * masks[layer_key[count]]).pow(2).sum()) * lam_q  # g1 * g1 and g2 * g2
                 if it % 2 == 1:
                     layer_g1g2 = (grad_f[count] * last_grad_f[count] * masks[layer_key[count]]).sum()  # g1 * g2
                     g1_g2 += layer_g1g2
                     g1_g2_list.append(layer_g1g2)
                     # g1_g2_sim += (grad_f[count] * last_grad_f[count]).sum() / (grad_f[count].pow(2).sum().sqrt()*last_grad_f[count].pow(2).sum().sqrt())
-                    g1_g2_sim_list.append(layer_g1g2 / ((grad_f[count]*masks[layer_key[count]]).pow(2).sum().sqrt()*(last_grad_f[count]*masks[layer_key[count]]).pow(2).sum().sqrt()))
+                    g1_g2_sim_list.append(layer_g1g2 / (
+                                (grad_f[count] * masks[layer_key[count]]).pow(2).sum().sqrt() * (
+                                    last_grad_f[count] * masks[layer_key[count]]).pow(2).sum().sqrt()))
                 count += 1
 
         if it % 2 == 0:
@@ -304,7 +307,8 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
                     (lr_scheduler.get_last_lr(), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
         elif 'preset' in lr_mode:
             desc = ('[LR=%s] Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-                    (lr_scheduler.get_lr(optimizer), train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+                    (lr_scheduler.get_lr(optimizer), train_loss / (batch_idx + 1), 100. * correct / total, correct,
+                     total))
         prog_bar.set_description(desc, refresh=True)
 
     writer.add_scalar('iter_%d/train/loss' % iteration, train_loss / (batch_idx + 1), epoch)
@@ -525,19 +529,35 @@ def main(config):
     # pre_ratio = ratio
     mb.model.apply(weights_init)
     print("=> Applying weight initialization(%s)." % config.get('init_method', 'kaiming'))
-    masks, masks_98 = Panning(mb.model, pre_ratio, trainloader, 'cuda',
-                              num_classes=classes[config.dataset],
-                              samples_per_class=config.samples_per_class,
-                              num_iters=config.get('num_iters', 1),
-                              single_data=config.single_data,
-                              prune_mode=config.prune_mode,
-                              prune_conv=config.prune_conv,
-                              add_link=config.core_link,
-                              delete_link=config.core_link,
-                              enlarge=config.enlarge,
-                              prune_link=config.prune_link,
-                              train_one=False
-                              )
+    masks, masks_98, first_data = Panning(mb.model, pre_ratio, trainloader, 'cuda',
+                                          num_classes=classes[config.dataset],
+                                          samples_per_class=config.samples_per_class,
+                                          num_iters=config.get('num_iters', 1),
+                                          single_data=config.single_data,
+                                          prune_mode=config.prune_mode,
+                                          prune_conv=config.prune_conv,
+                                          add_link=config.core_link,
+                                          delete_link=config.core_link,
+                                          enlarge=config.enlarge,
+                                          prune_link=config.prune_link,
+                                          # train_one=True
+                                          )
+    # 分析剪枝后同数据下的敏感情况
+    # masks, _, __ = Panning(mb.model, ratio, trainloader, 'cuda',
+    #                        num_classes=classes[config.dataset],
+    #                        samples_per_class=config.samples_per_class,
+    #                        num_iters=config.get('num_iters', 1),
+    #                        reinit=False,
+    #                        prune_mode=config.prune_mode_pa,
+    #                        prune_conv=config.prune_conv_pa,
+    #                        add_link=config.core_link,
+    #                        delete_link=config.core_link,
+    #                        enlarge=config.enlarge,
+    #                        prune_link=config.prune_link,
+    #                        # first_masks=masks,
+    #                        first_data=first_data,
+    #                        train_one=True
+    #                        )
     # 用于分析两次剪枝的筛选情况
     # # 与95%与98%比较（筛选占比）
     # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_98.values()]))

@@ -59,16 +59,12 @@ def count_fc_parameters(net):
 
 
 def Panning(net, ratio, train_dataloader, device,
-            num_classes=10, samples_per_class=15, num_iters=3, T=200, reinit=True, prune_masks=None,
-            prune_mode=3, prune_conv=False, add_link=False, delete_link=False, delete_conv=False, enlarge=False,
-            prune_link=False, debug_mode=False, debug_path='', debug_epoch=0):
+            num_classes=10, samples_per_class=10, num_iters=1, T=200, reinit=True, prune_masks=None,
+            prune_mode=3, data_mode=0, prune_conv=False, add_link=False, delete_link=False, delete_conv=False,
+            enlarge=False, prune_link=False, debug_mode=False, debug_path='', debug_epoch=0):
     eps = 1e-10
-    # print(f'ratio:{ratio}')
     keep_ratio = (1 - ratio)
-    if enlarge:
-        keep_ratio *= 2
     old_net = net
-
     net = copy.deepcopy(net)  # .eval()
     net.zero_grad()
 
@@ -86,7 +82,12 @@ def Panning(net, ratio, train_dataloader, device,
     samples_per_class = 10
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
     N = inputs.shape[0]
-    equal_parts = N // 1
+    if data_mode == 0:
+        equal_parts = N // 1
+    elif data_mode == 1:
+        equal_parts = N // 2
+    else:
+        equal_parts = N // 2
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
@@ -126,11 +127,12 @@ def Panning(net, ratio, train_dataloader, device,
     for w in weights_v2:
         w.requires_grad_(True)
     print("gradient => g")
-    # outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    # loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    # grad_b = autograd.grad(loss_b, weights_v2, create_graph=True)
-    outputs = net.forward(inputs) / T
-    loss_b = F.cross_entropy(outputs, targets)
+    if data_mode == 0:
+        outputs = net.forward(inputs) / T
+        loss_b = F.cross_entropy(outputs, targets)
+    else:
+        outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
+        loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
     grad_b = autograd.grad(loss_b, weights_v2, create_graph=True)
     print("gradient of norm gradient =》 Hg")
     gbb = 0
