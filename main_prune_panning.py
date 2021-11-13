@@ -301,7 +301,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                 'epoch': epoch,
                 'args': config,
                 'mask': mb.masks,
-                'ratio': mb.get_ratio_at_each_layer()
+                'ratio': mb.get_ratio_at_each_layer() if config.prune_mode > 0 else None
             }
             path = os.path.join(ckpt_path, 'finetune_%s_%s%s_r%s_it%d_best.pth.tar' % (config.dataset,
                                                                                        config.network,
