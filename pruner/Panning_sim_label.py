@@ -81,7 +81,10 @@ def Panning(net, ratio, train_dataloader, device,
     samples_per_class = 10
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
     N = inputs.shape[0]
-    num_group = 5
+    if num_classes == 100:
+        num_group = 5
+    else:
+        num_group = 2
     equal_parts = N // num_group
     # # 按标签排列 pass
     # targets, _index = torch.sort(targets)
@@ -114,7 +117,8 @@ def Panning(net, ratio, train_dataloader, device,
         data_mode:
             0 - 
         prune_mode:
-            1 - 
+            1 - 和绝对值
+            2 - 绝对值和
     """
 
     # === 计算分值 ===
@@ -124,12 +128,18 @@ def Panning(net, ratio, train_dataloader, device,
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
             kxt = 0
-            for i in range(len(gradg_list)):
-                _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
-                kxt += torch.abs(_qhg)
-            #     print(torch.mean(_qhg), torch.sum(_qhg))
-            # print('-' * 20)
+            if prune_mode == 1:
+                for i in range(len(gradg_list)):
+                    _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
+                    kxt += torch.abs(_qhg)
+                #     print(torch.mean(_qhg), torch.sum(_qhg))
+                # print('-' * 20)
 
+            if prune_mode == 2:
+                for i in range(len(gradg_list)):
+                    _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
+                    kxt += _qhg
+                kxt = torch.abs(kxt)
             # 评估分数
             grads[old_modules[idx]] = kxt
 
