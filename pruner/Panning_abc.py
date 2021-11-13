@@ -88,6 +88,13 @@ def Panning(net, ratio, train_dataloader, device,
     print("gradient => g")
     samples_per_class = 15
     inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class)
+    # 按组排列
+    _index = []
+    for i in range(num_classes):
+        _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
+    inputs = inputs[_index]
+    targets = targets[_index]
+
     N = inputs.shape[0]
     equal_parts = N // 3
     inputs = inputs.to(device)

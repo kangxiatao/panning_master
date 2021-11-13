@@ -77,91 +77,44 @@ def Panning(net, ratio, train_dataloader, device,
     for w in weights:
         w.requires_grad_(True)
 
-    # -------- 这部分为直接求解，显存爆了 --------
     print("fetch data")
     samples_per_class = 10
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
-    # 按组排列
-    _index = []
-    for i in range(num_classes):
-        _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
-    inputs = inputs[_index]
-    targets = targets[_index]
-
     N = inputs.shape[0]
-    equal_parts = N // 2
+    num_group = 5
+    equal_parts = N // num_group
+    # # 按标签排列 pass
+    # targets, _index = torch.sort(targets)
+    # inputs = inputs[_index]
+    # # 按组排列
+    # _index = []
+    # for i in range(num_classes):
+    #     _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
+    # inputs = inputs[_index]
+    # targets = targets[_index]
+
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
-    outputs = net.forward(inputs[:equal_parts]) / T
-    loss_a = F.cross_entropy(outputs, targets[:equal_parts])
-    grad_a = autograd.grad(loss_a, weights, create_graph=True)
-    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    grad_b = autograd.grad(loss_b, weights, create_graph=True)
-    print("gradient of norm gradient =》 Hg")
-    gab1 = 0
-    _layer = 0
-    for layer in net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            gab1 += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
-            _layer += 1
-    grad_ab1 = autograd.grad(gab1, weights)
-    # 更新参数
-    net.train()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-    correct = 0
-    total = 0
-    optimizer.zero_grad()
-    outputs = net(inputs)
-    loss = criterion(outputs, targets)
-    loss.backward()
-    optimizer.step()
-    train_loss = loss.item()
-    _, predicted = outputs.max(1)
-    total += targets.size(0)
-    correct += predicted.eq(targets).sum().item()
-    print('Loss: %.3f | Acc: %.3f%% (%d/%d)' % (train_loss, 100. * correct / total, correct, total))
-
-    # 第二次推断
-    weights_v2 = []
-    for layer in net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            weights_v2.append(layer.weight)
-    for w in weights_v2:
-        w.requires_grad_(True)
-    print("gradient => g")
-    outputs = net.forward(inputs[:equal_parts]) / T
-    loss_a = F.cross_entropy(outputs, targets[:equal_parts])
-    grad_a = autograd.grad(loss_a, weights, create_graph=True)
-    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    grad_b = autograd.grad(loss_b, weights, create_graph=True)
-    print("gradient of norm gradient =》 Hg")
-    gab2 = 0
-    _layer = 0
-    for layer in net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            gab2 += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
-            _layer += 1
-    print(gab1, gab2)
-    grad_ab2 = autograd.grad(gab2, weights_v2)
-
-    # 重置w
-    weights.clear()
-    for layer in old_net.modules():
-        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            weights.append(layer.weight)
+    gradg_list = []
+    for i in range(num_group):
+        _outputs = net.forward(inputs[i*equal_parts:(i+1)*equal_parts]) / T
+        _loss = F.cross_entropy(_outputs, targets[i*equal_parts:(i+1)*equal_parts])
+        _grad = autograd.grad(_loss, weights, create_graph=True)
+        _gz = 0
+        _layer = 0
+        for layer in net.modules():
+            if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                _gz += _grad[_layer].pow(2).sum()  # g * g
+                _layer += 1
+        gradg_list.append(autograd.grad(_gz, weights))
 
     # === 剪枝部分 ===
     """
+        data_mode:
+            0 - 
         prune_mode:
-            1 - 差值最大
-            2 - 差值最小
-            3 - 差值绝对值
-            4 - 差值归一化
-            5 - 。。。
+            1 - 
     """
 
     # === 计算分值 ===
@@ -170,43 +123,15 @@ def Panning(net, ratio, train_dataloader, device,
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            a = weights[layer_cnt] * grad_ab1[layer_cnt]  # theta_q grad_1
-            b = layer.weight.data * grad_ab2[layer_cnt]  # theta_q grad_2
-            # print(torch.mean(a), torch.sum(a))
-            # print(torch.mean(b), torch.sum(b))
-            # print(torch.mean(weights[layer_cnt]), torch.sum(weights[layer_cnt]))
-            # print(torch.mean(layer.weight.data), torch.sum(layer.weight.data))
+            kxt = 0
+            for i in range(len(gradg_list)):
+                _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
+                kxt += torch.abs(_qhg)
+            #     print(torch.mean(_qhg), torch.sum(_qhg))
             # print('-' * 20)
-            # print('0:', torch.sum(torch.cat([torch.flatten(layer.weight.data == 0)])))
-
-            x = a
-            if prune_mode == 1:
-                x = a - b
-            if prune_mode == 2:
-                x = b - a
-            if prune_mode == 3:
-                x = torch.abs(a - b)
-            if prune_mode == 4:
-                x = torch.div(torch.abs(a - b), torch.abs(a) + torch.abs(b))
-                x = torch.where(torch.isnan(x), torch.full_like(x, 0), x)
-                x = torch.where(x == 1, torch.full_like(x, 0), x)
-            if prune_mode == 5:
-                x = torch.abs(a - b) * (torch.abs(a) + torch.abs(b))
-
-            print(torch.max(torch.abs(x)))
-            if prune_conv:
-                # 卷积根据设定剪枝率按卷积核保留
-                if isinstance(layer, nn.Conv2d):
-                    # (n, c, k, k)
-                    k1 = x.shape[2]
-                    k2 = x.shape[3]
-                    x = torch.sum(x, dim=(2, 3), keepdim=True)
-                    x = x.repeat(1, 1, k1, k2)
-                    # 卷积核取均值
-                    x = torch.div(x, k1 * k2)
 
             # 评估分数
-            grads[old_modules[idx]] = x
+            grads[old_modules[idx]] = kxt
 
             layer_cnt += 1
 

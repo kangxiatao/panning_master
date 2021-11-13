@@ -24,25 +24,26 @@ from models.base.init_utils import weights_init
 from utils.common_utils import (get_logger, makedirs, process_config, PresetLRScheduler, str_to_list)
 from utils.data_utils import get_dataloader
 from utils.network_utils import get_network
-from pruner.Panning_abc import Panning
+from pruner.Panning_sim_label import Panning
 from utils import mail_log
 
 
 def init_config():
     parser = argparse.ArgumentParser()
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
-    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
+    parser.add_argument('--config', type=str, default='configs/cifar100/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
-    parser.add_argument('--run', type=str, default='exp5')
+    parser.add_argument('--run', type=str, default='expsim1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=6)
+    parser.add_argument('--prune_mode', type=int, default=5)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
+    parser.add_argument('--data_mode', type=int, default=1)  # 数据模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
     parser.add_argument('--core_link', type=int, default=0)  # 核链标志
     parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
-    parser.add_argument('--prune_epoch', type=int, default=1)  # 第二次修剪时间
+    parser.add_argument('--prune_epoch', type=int, default=0)  # 第二次修剪时间
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--debug', type=int, default=0)  # 调试标记（打印数据和作图等）
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
@@ -60,6 +61,7 @@ def init_config():
         print("set new target_ratio:{}".format(config.target_ratio))
     config.prune_mode = args.prune_mode
     config.prune_mode_pa = args.prune_mode_pa
+    config.data_mode = args.data_mode
     config.prune_conv = True if args.prune_conv == 1 else False
     config.prune_conv_pa = True if args.prune_conv_pa == 1 else False
     config.core_link = True if args.core_link == 1 else False
@@ -271,45 +273,6 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
     best_epoch = 0
     for epoch in range(num_epochs):
 
-        # 淘金
-        if epoch == config.prune_epoch and config.prune_mode_pa > 0:
-            masks = Panning(mb.model, ratio, trainloader, 'cuda',
-                            num_classes=num_classes,
-                            samples_per_class=config.samples_per_class,
-                            num_iters=config.get('num_iters', 1),
-                            reinit=False,
-                            prune_mode=config.prune_mode_pa,
-                            prune_conv=config.prune_conv_pa,
-                            add_link=config.core_link,
-                            delete_link=config.core_link,
-                            enlarge=config.enlarge,
-                            prune_link=config.prune_link
-                            )
-            # print(masks)
-            # ========== register mask ==================
-            mb.register_mask(masks)
-            # ========== print pruning details ============
-            logger.info('**[%d] Mask and training setting: ' % iteration)
-            print_inf = print_mask_information(mb, logger)
-        # 训练中得到模型状态
-        if config.debug > 0 and epoch == 1:
-            masks = Panning(mb.model, ratio, trainloader, 'cuda',
-                            num_classes=num_classes,
-                            samples_per_class=config.samples_per_class,
-                            num_iters=config.get('num_iters', 1),
-                            reinit=False,
-                            prune_masks=prune_masks,
-                            prune_mode=0,
-                            prune_conv=False,
-                            add_link=False,
-                            delete_link=False,
-                            enlarge=False,
-                            prune_link=False,
-                            debug_mode=config.debug,
-                            debug_path=config.summary_dir,
-                            debug_epoch=epoch
-                            )
-
         train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer, iteration=iteration)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
         lr_scheduler.step()
@@ -332,25 +295,6 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             torch.save(state, path)
             best_acc = test_acc
             best_epoch = epoch
-
-    # 训练后得到模型状态
-    if config.debug > 0:
-        masks = Panning(mb.model, ratio, trainloader, 'cuda',
-                        num_classes=num_classes,
-                        samples_per_class=config.samples_per_class,
-                        num_iters=config.get('num_iters', 1),
-                        reinit=False,
-                        prune_masks=prune_masks,
-                        prune_mode=0,
-                        prune_conv=False,
-                        add_link=False,
-                        delete_link=False,
-                        enlarge=False,
-                        prune_link=False,
-                        debug_mode=config.debug,
-                        debug_path=config.summary_dir,
-                        debug_epoch=num_epochs
-                        )
 
     logger.info('Iteration [%d], best acc: %.4f, epoch: %d' %
                 (iteration, best_acc, best_epoch))
@@ -435,6 +379,7 @@ def main(config):
                     samples_per_class=config.samples_per_class,
                     num_iters=config.get('num_iters', 1),
                     prune_mode=config.prune_mode,
+                    data_mode=config.data_mode,
                     prune_conv=config.prune_conv,
                     add_link=config.core_link,
                     delete_link=config.core_link,
