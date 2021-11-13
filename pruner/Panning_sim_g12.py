@@ -82,26 +82,24 @@ def Panning(net, ratio, train_dataloader, device,
     samples_per_class = 10
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
     N = inputs.shape[0]
-    if data_mode == 0:
-        equal_parts = N // 1
-    elif data_mode == 1:
-        equal_parts = N // 2
-    else:
-        equal_parts = N // 1
+    equal_parts = N // 2
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
     outputs = net.forward(inputs[:equal_parts]) / T
     loss_a = F.cross_entropy(outputs, targets[:equal_parts])
     grad_a = autograd.grad(loss_a, weights, create_graph=True)
+    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
+    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
+    grad_b = autograd.grad(loss_b, weights, create_graph=True)
     print("gradient of norm gradient =》 Hg")
-    gaa = 0
+    gab1 = 0
     _layer = 0
     for layer in net.modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            gaa += grad_a[_layer].pow(2).sum()  # ga * ga
+            gab1 += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
             _layer += 1
-    grad_aa = autograd.grad(gaa, weights)
+    grad_ab1 = autograd.grad(gab1, weights)
     # 更新参数
     net.train()
     criterion = nn.CrossEntropyLoss()
@@ -109,14 +107,14 @@ def Panning(net, ratio, train_dataloader, device,
     correct = 0
     total = 0
     optimizer.zero_grad()
-    outputs = net(inputs[:equal_parts])
-    loss = criterion(outputs, targets[:equal_parts])
+    outputs = net(inputs)
+    loss = criterion(outputs, targets)
     loss.backward()
     optimizer.step()
     train_loss = loss.item()
     _, predicted = outputs.max(1)
-    total += targets[:equal_parts].size(0)
-    correct += predicted.eq(targets[:equal_parts]).sum().item()
+    total += targets.size(0)
+    correct += predicted.eq(targets).sum().item()
     print('Loss: %.3f | Acc: %.3f%% (%d/%d)' % (train_loss, 100. * correct / total, correct, total))
 
     # 第二次推断
@@ -127,22 +125,21 @@ def Panning(net, ratio, train_dataloader, device,
     for w in weights_v2:
         w.requires_grad_(True)
     print("gradient => g")
-    if data_mode == 0:
-        outputs = net.forward(inputs) / T
-        loss_b = F.cross_entropy(outputs, targets)
-    else:
-        outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
-        loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
-    grad_b = autograd.grad(loss_b, weights_v2, create_graph=True)
+    outputs = net.forward(inputs[:equal_parts]) / T
+    loss_a = F.cross_entropy(outputs, targets[:equal_parts])
+    grad_a = autograd.grad(loss_a, weights, create_graph=True)
+    outputs = net.forward(inputs[equal_parts:2*equal_parts]) / T
+    loss_b = F.cross_entropy(outputs, targets[equal_parts:2*equal_parts])
+    grad_b = autograd.grad(loss_b, weights, create_graph=True)
     print("gradient of norm gradient =》 Hg")
-    gbb = 0
+    gab2 = 0
     _layer = 0
     for layer in net.modules():
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            gbb += grad_b[_layer].pow(2).sum()  # gb * gb
+            gab2 += (grad_a[_layer] * grad_b[_layer]).sum()  # ga * gb
             _layer += 1
-    print(gaa, gbb)
-    grad_bb = autograd.grad(gbb, weights_v2)
+    print(gab1, gab2)
+    grad_ab2 = autograd.grad(gab2, weights_v2)
 
     # 重置w
     weights.clear()
@@ -152,9 +149,6 @@ def Panning(net, ratio, train_dataloader, device,
 
     # === 剪枝部分 ===
     """
-        data_mode:
-            0 - 一份
-            1 - 分两份
         prune_mode:
             1 - 差值最大
             2 - 差值最小
@@ -166,17 +160,11 @@ def Panning(net, ratio, train_dataloader, device,
     # === 计算分值 ===
     layer_cnt = 0
     grads = dict()
-    # --- for debug ---
-    grads_a = dict()
-    grads_b = dict()
-    grads_c = dict()
-    # -----------------
-    grads_prune = dict()
     old_modules = list(old_net.modules())
     for idx, layer in enumerate(net.modules()):
         if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-            a = weights[layer_cnt] * grad_aa[layer_cnt]  # theta_q grad_aa
-            b = layer.weight.data * grad_bb[layer_cnt]  # theta_q grad_bb
+            a = weights[layer_cnt] * grad_ab1[layer_cnt]  # theta_q grad_1
+            b = layer.weight.data * grad_ab2[layer_cnt]  # theta_q grad_2
             # print(torch.mean(a), torch.sum(a))
             # print(torch.mean(b), torch.sum(b))
             # print(torch.mean(weights[layer_cnt]), torch.sum(weights[layer_cnt]))
