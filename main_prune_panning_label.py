@@ -24,7 +24,7 @@ from models.base.init_utils import weights_init
 from utils.common_utils import (get_logger, makedirs, process_config, PresetLRScheduler, str_to_list)
 from utils.data_utils import get_dataloader
 from utils.network_utils import get_network
-from pruner.Panning_sim_label import Panning
+from pruner.Panning_label import Panning
 from utils import mail_log
 
 
@@ -35,7 +35,7 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='expsim1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=5)
+    parser.add_argument('--prune_mode', type=int, default=3)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--data_mode', type=int, default=1)  # 数据模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志

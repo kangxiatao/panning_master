@@ -117,8 +117,8 @@ def Panning(net, ratio, train_dataloader, device,
         data_mode:
             0 - 
         prune_mode:
-            1 - 和绝对值
-            2 - 绝对值和
+            1 - 绝对值和
+            2 - 和绝对值
     """
 
     # === 计算分值 ===
@@ -140,6 +140,14 @@ def Panning(net, ratio, train_dataloader, device,
                     _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
                     kxt += _qhg
                 kxt = torch.abs(kxt)
+
+            if prune_mode == 3:
+                kxt = 1e6  # 约等于超参，估计值，kxt是👴
+                for i in range(len(gradg_list)):
+                    _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
+                    kxt *= torch.abs(_qhg)
+                #     print(torch.mean(_qhg), torch.sum(_qhg))
+                # print('-' * 20)
             # 评估分数
             grads[old_modules[idx]] = kxt
 
