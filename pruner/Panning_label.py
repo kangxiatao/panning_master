@@ -160,8 +160,8 @@ def Panning(net, ratio, train_dataloader, device,
 
             # 评估分数
             grads[old_modules[idx]] = kxt
-            print(torch.mean(kxt), torch.sum(kxt))
-            print('-' * 20)
+            # print(torch.mean(kxt), torch.sum(kxt))
+            # print('-' * 20)
 
             layer_cnt += 1
 
