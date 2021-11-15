@@ -59,9 +59,8 @@ def count_fc_parameters(net):
 
 
 def Panning(net, ratio, train_dataloader, device,
-            num_classes=10, samples_per_class=10, num_iters=1, T=200, reinit=True, prune_masks=None,
-            prune_mode=3, data_mode=0, prune_conv=False, add_link=False, delete_link=False, delete_conv=False,
-            enlarge=False, prune_link=False, debug_mode=False, debug_path='', debug_epoch=0):
+            num_classes=10, samples_per_class=10, T=200, reinit=True,
+            data_mode=0, grad_mode=0, prune_mode=4, num_group=None, debug_mode=False):
     eps = 1e-10
     keep_ratio = (1 - ratio)
     old_net = net
@@ -81,41 +80,71 @@ def Panning(net, ratio, train_dataloader, device,
     samples_per_class = 10
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
     N = inputs.shape[0]
-    if num_classes == 100:
-        num_group = 5
-    else:
-        num_group = 2
+    if num_group is None:
+        num_group = 2 if num_classes == 10 else 5
     equal_parts = N // num_group
-    # # 按标签排列 pass
-    # targets, _index = torch.sort(targets)
-    # inputs = inputs[_index]
-    # # 按组排列
-    # _index = []
-    # for i in range(num_classes):
-    #     _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
-    # inputs = inputs[_index]
-    # targets = targets[_index]
+    if data_mode == 0:
+        # # 同标签组排列 pass
+        # targets, _index = torch.sort(targets)
+        # inputs = inputs[_index]
+        pass
+    else:
+        # 不同标签组排列
+        _index = []
+        for i in range(num_classes):
+            _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
+        inputs = inputs[_index]
+        targets = targets[_index]
 
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
     gradg_list = []
-    for i in range(num_group):
-        _outputs = net.forward(inputs[i*equal_parts:(i+1)*equal_parts]) / T
-        _loss = F.cross_entropy(_outputs, targets[i*equal_parts:(i+1)*equal_parts])
-        _grad = autograd.grad(_loss, weights, create_graph=True)
-        _gz = 0
+
+    if grad_mode == 0:
+        for i in range(num_group):
+            _outputs = net.forward(inputs[i*equal_parts:(i+1)*equal_parts]) / T
+            _loss = F.cross_entropy(_outputs, targets[i*equal_parts:(i+1)*equal_parts])
+            _grad = autograd.grad(_loss, weights, create_graph=True)
+            _gz = 0
+            _layer = 0
+            for layer in net.modules():
+                if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                    _gz += _grad[_layer].pow(2).sum()  # g * g
+                    _layer += 1
+            gradg_list.append(autograd.grad(_gz, weights))
+    else:
+        _grad_ls = []
+        for i in range(num_group):
+            _outputs = net.forward(inputs[i*equal_parts:(i+1)*equal_parts]) / T
+            _loss = F.cross_entropy(_outputs, targets[i*equal_parts:(i+1)*equal_parts])
+            _grad_ls.append(autograd.grad(_loss, weights, create_graph=True))
+        _grad_and = []
         _layer = 0
         for layer in net.modules():
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-                _gz += _grad[_layer].pow(2).sum()  # g * g
+                _gand = 0
+                for i in range(num_group):
+                    _gand += _grad_ls[i][_layer]
+                _grad_and.append(_gand)
                 _layer += 1
-        gradg_list.append(autograd.grad(_gz, weights))
+        for i in range(num_group):
+            _gz = 0
+            _layer = 0
+            for layer in net.modules():
+                if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                    _gz += (_grad_and[_layer]*_grad_ls[i][_layer]).sum()  # g * g
+                    _layer += 1
+            gradg_list.append(autograd.grad(_gz, weights, retain_graph=True))
 
     # === 剪枝部分 ===
     """
         data_mode:
-            0 - 
+            0 - 不同标签分组
+            1 - 同标签分组
+        gard_mode:
+            0 - 梯度范数梯度
+            1 - 不同组点积（相似度）梯度
         prune_mode:
             1 - 绝对值和
             2 - 和绝对值
@@ -180,7 +209,7 @@ def Panning(net, ratio, train_dataloader, device,
     print('** accept: ', acceptable_score)
 
     for m, g in grads.items():
-        if prune_link or prune_mode == 0:
+        if prune_mode == 0:
             keep_masks[m] = torch.ones_like(g).float()
         else:
             keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()

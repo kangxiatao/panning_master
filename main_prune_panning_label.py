@@ -31,19 +31,13 @@ from utils import mail_log
 def init_config():
     parser = argparse.ArgumentParser()
     # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
-    parser.add_argument('--config', type=str, default='configs/cifar100/vgg19/Panning_98.json')
+    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='expsim1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=3)
-    parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
-    parser.add_argument('--data_mode', type=int, default=1)  # 数据模式
-    parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
-    parser.add_argument('--prune_conv_pa', type=int, default=0)
-    parser.add_argument('--core_link', type=int, default=0)  # 核链标志
-    parser.add_argument('--enlarge', type=int, default=0)  # 扩张标志
-    parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
-    parser.add_argument('--prune_epoch', type=int, default=0)  # 第二次修剪时间
+    parser.add_argument('--data_mode', type=int, default=0)  # 数据模式
+    parser.add_argument('--grad_mode', type=int, default=1)
+    parser.add_argument('--prune_mode', type=int, default=4)
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--debug', type=int, default=0)  # 调试标记（打印数据和作图等）
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
@@ -59,16 +53,9 @@ def init_config():
     if args.remain != 666:
         config.target_ratio = (100 - args.remain) / 100.0
         print("set new target_ratio:{}".format(config.target_ratio))
-    config.prune_mode = args.prune_mode
-    config.prune_mode_pa = args.prune_mode_pa
     config.data_mode = args.data_mode
-    config.prune_conv = True if args.prune_conv == 1 else False
-    config.prune_conv_pa = True if args.prune_conv_pa == 1 else False
-    config.core_link = True if args.core_link == 1 else False
-    config.enlarge = True if args.enlarge == 1 else False
-    config.prune_link = True if args.prune_link == 1 else False
-    # config.debug = True if args.debug == 1 else False
-    config.prune_epoch = args.prune_epoch
+    config.grad_mode = args.grad_mode
+    config.prune_mode = args.prune_mode
     config.debug = args.debug
     config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
@@ -369,24 +356,15 @@ def main(config):
                                                                                 ratio,
                                                                                 1,
                                                                                 num_iterations))
-
-    pre_ratio = 1 - ((1 - ratio) * 2) if config.prune_mode_pa > 0 else ratio
-    # pre_ratio = ratio
     mb.model.apply(weights_init)
     print("=> Applying weight initialization(%s)." % config.get('init_method', 'kaiming'))
-    masks = Panning(mb.model, pre_ratio, trainloader, 'cuda',
+    masks = Panning(mb.model, ratio, trainloader, 'cuda',
                     num_classes=classes[config.dataset],
                     samples_per_class=config.samples_per_class,
-                    num_iters=config.get('num_iters', 1),
-                    prune_mode=config.prune_mode,
                     data_mode=config.data_mode,
-                    prune_conv=config.prune_conv,
-                    add_link=config.core_link,
-                    delete_link=config.core_link,
-                    enlarge=config.enlarge,
-                    prune_link=config.prune_link,
-                    debug_mode=config.debug,
-                    debug_path=config.summary_dir
+                    grad_mode=config.grad_mode,
+                    prune_mode=config.prune_mode,
+                    debug_mode=config.debug
                     )
     # ========== register mask ==================
     mb.register_mask(masks)
