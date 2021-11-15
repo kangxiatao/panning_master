@@ -119,6 +119,8 @@ def Panning(net, ratio, train_dataloader, device,
         prune_mode:
             1 - 绝对值和
             2 - 和绝对值
+            3 - 乘积
+            4 - 欧氏距离
     """
 
     # === 计算分值 ===
@@ -145,11 +147,21 @@ def Panning(net, ratio, train_dataloader, device,
                 kxt = 1e6  # 约等于超参，估计值，kxt是👴
                 for i in range(len(gradg_list)):
                     _qhg = layer.weight.data * gradg_list[i][layer_cnt]  # theta_q grad
-                    kxt *= torch.abs(_qhg)
-                #     print(torch.mean(_qhg), torch.sum(_qhg))
+                    kxt *= torch.abs(_qhg)  # 最后线性层有bug，？，不解
+                    # print(torch.mean(torch.abs(_qhg)), torch.sum(torch.abs(_qhg)))
                 # print('-' * 20)
+
+            if prune_mode == 4:
+                aef = 1e6  # 约等于超参，估计值
+                for i in range(len(gradg_list)):
+                    _qhg = layer.weight.data * gradg_list[i][layer_cnt] * aef  # theta_q grad
+                    kxt += _qhg.pow(2)
+                kxt = kxt.sqrt()
+
             # 评估分数
             grads[old_modules[idx]] = kxt
+            print(torch.mean(kxt), torch.sum(kxt))
+            print('-' * 20)
 
             layer_cnt += 1
 
@@ -164,7 +176,6 @@ def Panning(net, ratio, train_dataloader, device,
 
     num_params_to_rm = int(len(all_scores) * keep_ratio)
     threshold, _index = torch.topk(all_scores, num_params_to_rm)
-    # import pdb; pdb.set_trace()
     acceptable_score = threshold[-1]
     print('** accept: ', acceptable_score)
 
