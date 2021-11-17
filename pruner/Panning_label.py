@@ -94,11 +94,12 @@ def Panning(net, ratio, train_dataloader, device,
     else:
         # 不同标签组排列
         _index = []
-        for i in range(num_classes):
-            _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
+        for i in range(samples_per_class):
+            _index.extend([i + j*samples_per_class for j in range(0, num_classes)])
         inputs = inputs[_index]
         targets = targets[_index]
-    print(targets)
+        # print(_index)
+    print(targets[:num_classes])
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
