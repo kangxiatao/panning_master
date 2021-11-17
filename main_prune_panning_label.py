@@ -30,13 +30,13 @@ from utils import mail_log
 
 def init_config():
     parser = argparse.ArgumentParser()
-    # parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
-    parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
+    parser.add_argument('--config', type=str, default='configs/cifar10/resnet32/Panning_98.json')
+    # parser.add_argument('--config', type=str, default='configs/cifar10/vgg19/Panning_98.json')
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='expsim1')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--data_mode', type=int, default=0)  # 数据模式
-    parser.add_argument('--grad_mode', type=int, default=1)
+    parser.add_argument('--data_mode', type=int, default=1)  # 数据模式
+    parser.add_argument('--grad_mode', type=int, default=3)
     parser.add_argument('--prune_mode', type=int, default=4)
     parser.add_argument('--num_group', type=int, default=666)  # 分组数
     parser.add_argument('--remain', type=float, default=666)

@@ -81,7 +81,10 @@ def Panning(net, ratio, train_dataloader, device,
     inputs, targets = fetch_data(train_dataloader, num_classes, samples_per_class)
     N = inputs.shape[0]
     if num_group is None:
-        num_group = 2 if num_classes == 10 else 5
+        if data_mode == 0:
+            num_group = 2 if num_classes == 10 else 5
+        else:
+            num_group = 2
     equal_parts = N // num_group
     if data_mode == 0:
         # # 同标签组排列 pass
@@ -95,7 +98,7 @@ def Panning(net, ratio, train_dataloader, device,
             _index.extend([i + j for j in range(0, samples_per_class * num_classes, num_classes)])
         inputs = inputs[_index]
         targets = targets[_index]
-
+    print(targets)
     inputs = inputs.to(device)
     targets = targets.to(device)
     print("gradient => g")
@@ -113,7 +116,7 @@ def Panning(net, ratio, train_dataloader, device,
                     _gz += _grad[_layer].pow(2).sum()  # g * g
                     _layer += 1
             gradg_list.append(autograd.grad(_gz, weights))
-    else:
+    elif grad_mode == 1:
         _grad_ls = []
         for i in range(num_group):
             _outputs = net.forward(inputs[i*equal_parts:(i+1)*equal_parts]) / T
@@ -133,9 +136,25 @@ def Panning(net, ratio, train_dataloader, device,
             _layer = 0
             for layer in net.modules():
                 if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
-                    _gz += (_grad_and[_layer]*_grad_ls[i][_layer]).sum()  # g * g
+                    _gz += (_grad_and[_layer]*_grad_ls[i][_layer]).sum()  # ga * gn
                     _layer += 1
             gradg_list.append(autograd.grad(_gz, weights, retain_graph=True))
+    else:
+        _grad_ls = []
+        for i in range(num_group):
+            _outputs = net.forward(inputs[i * equal_parts:(i + 1) * equal_parts]) / T
+            _loss = F.cross_entropy(_outputs, targets[i * equal_parts:(i + 1) * equal_parts])
+            _grad_ls.append(autograd.grad(_loss, weights, create_graph=True))
+
+        for i in range(num_group):
+            for j in range(i+1, num_group):
+                _gz = 0
+                _layer = 0
+                for layer in net.modules():
+                    if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                        _gz += (_grad_ls[i][_layer] * _grad_ls[j][_layer]).sum()  # g1 * g2
+                        _layer += 1
+                gradg_list.append(autograd.grad(_gz, weights, retain_graph=True))
 
     # === 剪枝部分 ===
     """
@@ -145,6 +164,7 @@ def Panning(net, ratio, train_dataloader, device,
         gard_mode:
             0 - 梯度范数梯度
             1 - 不同组点积（相似度）梯度
+            2 - 不同组对应点积
         prune_mode:
             1 - 绝对值和
             2 - 和绝对值
@@ -187,6 +207,12 @@ def Panning(net, ratio, train_dataloader, device,
                     kxt += _qhg.pow(2)
                 kxt = kxt.sqrt()
 
+            # if prune_mode == 5:
+            #     _qhg = []
+            #     for i in range(len(gradg_list)):
+            #         _qhg.append(layer.weight.data * gradg_list[i][layer_cnt])  # theta_q grad
+
+
             # 评估分数
             grads[old_modules[idx]] = kxt
             # print(torch.mean(kxt), torch.sum(kxt))
@@ -212,14 +238,14 @@ def Panning(net, ratio, train_dataloader, device,
         if prune_mode == 0:
             keep_masks[m] = torch.ones_like(g).float()
         else:
-            # 标签过大，全连接层不做修剪
-            if num_classes > 50:
-                if isinstance(m, nn.Linear):
-                    keep_masks[m] = torch.ones_like(g).float()
-                else:
-                    keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
-            else:
-                keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
+            # # 标签过大，全连接层不做修剪
+            # if num_classes > 50:
+            #     if isinstance(m, nn.Linear):
+            #         keep_masks[m] = torch.ones_like(g).float()
+            #     else:
+            #         keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
+            # else:
+            keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
 
     print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
 
