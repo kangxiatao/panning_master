@@ -38,6 +38,7 @@ def init_config():
     parser.add_argument('--data_mode', type=int, default=0)  # 数据模式
     parser.add_argument('--grad_mode', type=int, default=1)
     parser.add_argument('--prune_mode', type=int, default=4)
+    parser.add_argument('--num_group', type=int, default=666)  # 分组数
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--debug', type=int, default=0)  # 调试标记（打印数据和作图等）
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
@@ -53,6 +54,15 @@ def init_config():
     if args.remain != 666:
         config.target_ratio = (100 - args.remain) / 100.0
         print("set new target_ratio:{}".format(config.target_ratio))
+    if args.num_group != 666:
+        if 10 % args.num_group == 0:
+            config.num_group = args.num_group
+            print("set label group:{}".format(config.num_group))
+        else:
+            config.num_group = None
+            print("num_group must be divisible by the number of tags")
+    else:
+        config.num_group = None
     config.data_mode = args.data_mode
     config.grad_mode = args.grad_mode
     config.prune_mode = args.prune_mode
@@ -364,6 +374,7 @@ def main(config):
                     data_mode=config.data_mode,
                     grad_mode=config.grad_mode,
                     prune_mode=config.prune_mode,
+                    num_group=config.num_group,
                     debug_mode=config.debug
                     )
     # ========== register mask ==================

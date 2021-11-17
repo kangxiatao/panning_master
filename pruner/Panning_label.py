@@ -212,7 +212,14 @@ def Panning(net, ratio, train_dataloader, device,
         if prune_mode == 0:
             keep_masks[m] = torch.ones_like(g).float()
         else:
-            keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
+            # 标签过大，全连接层不做修剪
+            if num_classes > 50:
+                if isinstance(m, nn.Linear):
+                    keep_masks[m] = torch.ones_like(g).float()
+                else:
+                    keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
+            else:
+                keep_masks[m] = ((g / norm_factor) >= acceptable_score).float()
 
     print('Remaining:', torch.sum(torch.cat([torch.flatten(x == 1) for x in keep_masks.values()])))
 
