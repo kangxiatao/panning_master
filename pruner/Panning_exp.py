@@ -79,8 +79,8 @@ def Panning(net, ratio, train_dataloader, device,
     if first_masks:
         layer_key = [x for x in first_masks.keys()]
 
-    net = copy.deepcopy(net)  # .eval()
     net.zero_grad()
+    net = copy.deepcopy(net)  # .eval()
 
     weights = []
     for layer in net.modules():
@@ -105,6 +105,17 @@ def Panning(net, ratio, train_dataloader, device,
             # num_classes 个样本，每类样本取 samples_per_class 个
             inputs, targets = GraSP_fetch_data(train_dataloader, num_classes, samples_per_class, single_data)
             N = inputs.shape[0]
+
+            # 不同标签组排列
+            _index = []
+            for i in range(samples_per_class):
+                _index.extend([i + j * samples_per_class for j in range(0, num_classes)])
+            inputs = inputs[_index]
+            targets = targets[_index]
+            # print(inputs[1])
+            # print(inputs[1][1][1])
+            print(targets[:num_classes])
+
             # 把数据分为前后两个list
             din = copy.deepcopy(inputs)
             dtarget = copy.deepcopy(targets)
@@ -136,10 +147,13 @@ def Panning(net, ratio, train_dataloader, device,
                 for idx in range(len(grad_w)):
                     grad_w[idx] += grad_w_p[idx]
     else:
+        inputs_one, targets_one = first_data
+        # print(inputs_one[0][1][1][1])
+        # print(inputs_one[0][1].shape)
+        # print(targets_one[0][:num_classes])
         for it in range(num_iters):
             print("(1): Iterations %d/%d." % (it, num_iters))
             # num_classes 个样本，每类样本取 samples_per_class 个
-            inputs_one, targets_one = first_data
             inputs = inputs_one[it].to(device)
             targets = targets_one[it].to(device)
             outputs = net.forward(inputs) / T
@@ -180,7 +194,7 @@ def Panning(net, ratio, train_dataloader, device,
         targets = targets_one[it].to(device)
         outputs = net.forward(inputs) / T
         loss = F.cross_entropy(outputs, targets)
-
+        print(loss)
         gr_l2 = 0
         g1_g2 = 0
         # torch.autograd.grad() 对指定参数求导
@@ -213,7 +227,7 @@ def Panning(net, ratio, train_dataloader, device,
             else:
                 grad_diff = [grad_diff[i] + autograd.grad(g1_g2, weights, retain_graph=True)[i] for i in range(len(grad_diff))]
 
-        # print(torch.mean(z), torch.mean(gr_l2))
+        print(z, gr_l2, g1_g2)
 
     # === 剪枝部分 ===
     """
@@ -265,8 +279,8 @@ def Panning(net, ratio, train_dataloader, device,
             # ============== debug ==============
             debug = True
             if debug:
-                grads_p[old_modules[idx]] = -torch.abs(p)
-                # grads_p[old_modules[idx]] = p
+                # grads_p[old_modules[idx]] = -torch.abs(p)
+                grads_p[old_modules[idx]] = p
                 grads_l[old_modules[idx]] = l
                 grads_s[old_modules[idx]] = s
                 # grads_l[old_modules[idx]] = l
@@ -274,11 +288,10 @@ def Panning(net, ratio, train_dataloader, device,
                 grads_pl[old_modules[idx]] = p + l
 
                 # # 层突触分析
-                # print(torch.mean(x), torch.sum(x))
+                # print(torch.mean(p), torch.sum(p))
                 # print(torch.mean(l), torch.sum(l))
-                # print(torch.mean(x-q), torch.sum(x-q))
+                # print(torch.mean(p-l), torch.sum(p-l))
                 # print(torch.mean(d), torch.sum(d))
-                # # print(torch.mean(p), torch.sum(p))
                 # print('-' * 20)
                 # 排序分析图 49 46 43 40 36 33 30 27 23 20 17 14 10 7 3 0
                 use_layer = 666
@@ -332,7 +345,7 @@ def Panning(net, ratio, train_dataloader, device,
             if prune_mode == 4:  # gl2_diff
                 x = p - l
             if prune_mode == 5:  # gl2_diff
-                # x = -torch.abs(l - p)
+                # x = -torch.abs(p - l)
                 x = -torch.abs(d)
             if prune_mode == 6:  # ratio_layer
                 x = -torch.abs(l - p)
@@ -893,40 +906,47 @@ def Panning(net, ratio, train_dataloader, device,
     # # plt.legend()
     # # plt.show()
 
-    # # 每层分数排序分析（加入snip or other）
+    # # 每层分数排序分析（两种指标）
     # import matplotlib.pyplot as plt
     # plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
     # plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
     # plt.figure(1)
     #
     # for _layer, _key in enumerate(grad_key):
-    #     if 5 > _layer > 1:
+    #     if 16 > _layer > -1:
+    #         _label1 = 'gss'
+    #         _label2 = 'grasp'
     #         # 排序
-    #         gra, ind = torch.sort(torch.cat([torch.flatten(grads_d[grad_key[_layer]])]), descending=True)
-    #         snip = torch.cat([torch.flatten(grads_s[grad_key[_layer]])])
-    #         np_gra = gra.cpu().detach().numpy()
-    #         thre_ind = np.argwhere(np_gra > float(acceptable_score*norm_factor))[-1]
-    #         # np_snip = snip[ind].cpu().detach().numpy()[int(thre_ind):]
-    #         np_snip = snip[ind].cpu().detach().numpy()
+    #         soc1, ind = torch.sort(torch.cat([torch.flatten(grads[grad_key[_layer]])]), descending=True)
+    #         soc2, ind = torch.sort(torch.cat([torch.flatten(grads_p[grad_key[_layer]])]), descending=True)
+    #         # soc2 = torch.cat([torch.flatten(grads_s[grad_key[_layer]])])
+    #         np_s1 = soc1.cpu().detach().numpy()
+    #         np_s2 = soc2.cpu().detach().numpy()
+    #         # np_s2 = soc2[ind].cpu().detach().numpy()[int(thre_ind):]
+    #         # np_s2 = soc2[ind].cpu().detach().numpy()
+    #         thre_ind = np.argwhere(np_s1 > float(acceptable_score*norm_factor))[-1]
+    #         thre_ind__ = np.argwhere(np_s2 > float(acceptable_score__*norm_factor__))[-1]
     #         # zero_ind = np.argwhere(np_gra > 0)[-1]
-    #         # ax1 = plt.subplot(4, 4, _layer + 1)
-    #         plt.subplot(4, 4, _layer + 1)
-    #         plt.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
+    #         # plt.subplot(4, 4, _layer + 1)
+    #         # plt.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
     #         # plt.scatter(range(len(np_gra) - len(np_snip) + 1, len(np_gra) + 1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
-    #         # ax1.plot(range(1, len(np_gra) + 1, 1), np_gra, color='violet', label="grasp")
-    #         # ax1.axvline(thre_ind, color='green', linestyle=':')
-    #         # ax1.set_ylabel(u"grasp")
-    #         # # 新建一个共享x轴的双胞胎坐标系
-    #         # ax2 = ax1.twinx()
+    #         # plt.axvline(zero_ind, color='darkorchid', linestyle=':')
+    #         # plt.axvline(thre_ind, color='green', linestyle=':')
+    #         # plt.legend()
+    #         ax1 = plt.subplot(4, 4, _layer + 1)
+    #         ax1.plot(range(1, len(np_s1) + 1, 1), np_s1, color='violet', label=_label1)
+    #         ax1.axvline(thre_ind, color='violet', linestyle=':')
+    #         ax1.set_ylabel(_label1)
+    #         # 新建一个共享x轴的双胞胎坐标系
+    #         ax2 = ax1.twinx()
+    #         ax2.plot(range(1, len(np_s2) + 1, 1), np_s2, color='cornflowerblue', label=_label2)
+    #         ax2.axvline(thre_ind__, color='cornflowerblue', linestyle=':')
     #         # ax2.scatter(range(len(np_gra)-len(np_snip)+1, len(np_gra)+1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
     #         # ax2.scatter(range(1, len(np_snip)+1, 1), np_snip, color='cornflowerblue', s=1, label="snip")
-    #         # ax2.set_ylabel(u"snip")
-    #         # plt.axvline(zero_ind, color='darkorchid', linestyle=':')
-    #         plt.axvline(thre_ind, color='green', linestyle=':')
-    #         plt.legend()
-    #         # h1, l1 = ax1.get_legend_handles_labels()
-    #         # h2, l2 = ax2.get_legend_handles_labels()
-    #         # plt.legend(h1 + h2, l1 + l2, loc='best')
+    #         ax2.set_ylabel(_label2)
+    # h1, l1 = ax1.get_legend_handles_labels()
+    # h2, l2 = ax2.get_legend_handles_labels()
+    # plt.legend(h1 + h2, l1 + l2, loc='best')
     # plt.show()
 
     # # 分析核链
@@ -1035,53 +1055,63 @@ def Panning(net, ratio, train_dataloader, device,
     # plt.colorbar()
     # plt.show()
 
-    # 热力图2号，gra横坐标，snip纵坐标，卷积核
-    import matplotlib.pyplot as plt
-    plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-    plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-    plt.figure(1)
-
-    _layer_len = 0
-    for _layer, _key in enumerate(grad_key):
-        if isinstance(_key, nn.Conv2d):
-            _layer_len += 1
-    # print(f'_layer_len: {_layer_len}')
-
-    # 按层显示
+    # # 热力图2号，gra横坐标，snip纵坐标，卷积核
+    # import matplotlib.pyplot as plt
+    # plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+    # plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+    # plt.figure(1)
+    #
+    # _layer_len = 0
     # for _layer, _key in enumerate(grad_key):
     #     if isinstance(_key, nn.Conv2d):
-    #         gra = torch.cat([torch.flatten(torch.mean(grads_x[grad_key[_layer]], dim=(2, 3)))])
-    #         snip = (-1)*torch.cat([torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
-    #         np_gra = gra.cpu().detach().numpy()
-    #         np_snip = snip.cpu().detach().numpy()
-    #         plt.subplot(math.ceil((math.sqrt(_layer_len))), math.ceil((math.sqrt(_layer_len))), _layer + 1)
-    #         plt.scatter(np_gra, np_snip, s=1, alpha=0.3, cmap='rainbow')
-
-    # 整个网络
-    gra = None
-    snip = None
-    for _layer, _key in enumerate(grad_key):
-        if isinstance(_key, nn.Conv2d):
-            if gra is None:
-                gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3)))])
-                snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
-            else:
-                gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3))), gra])
-                snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3))), snip])
-    np_gra = -gra.cpu().detach().numpy()
-    np_snip = snip.cpu().detach().numpy()
-    # gra_index = np.argsort(-np_gra)  # 降序
-    # gra_len = len(np_gra)
-    # gra_02_ind = gra_index[int(gra_len * 0.02)]
-    # gra_05_ind = gra_index[int(gra_len * 0.05)]
-    # gra_10_ind = gra_index[int(gra_len * 0.1)]
-    # plt.axvline(np_gra[gra_02_ind], color='red', linestyle=':')
-    # plt.axvline(np_gra[gra_05_ind], color='green', linestyle=':')
-    # plt.axvline(np_gra[gra_10_ind], color='blue', linestyle=':')
-    plt.scatter(np_gra, np_snip, s=1, alpha=0.3, color='coral')
-    # plt.scatter(np_gra, np_snip, s=1, c=np.abs(np_gra*np_snip), cmap = plt.cm.plasma)
-
-    plt.show()
+    #         _layer_len += 1
+    # # print(f'_layer_len: {_layer_len}')
+    #
+    # # 按层显示
+    # # for _layer, _key in enumerate(grad_key):
+    # #     if isinstance(_key, nn.Conv2d):
+    # #         gra = torch.cat([torch.flatten(torch.mean(grads_x[grad_key[_layer]], dim=(2, 3)))])
+    # #         snip = (-1)*torch.cat([torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
+    # #         np_gra = gra.cpu().detach().numpy()
+    # #         np_snip = snip.cpu().detach().numpy()
+    # #         plt.subplot(math.ceil((math.sqrt(_layer_len))), math.ceil((math.sqrt(_layer_len))), _layer + 1)
+    # #         plt.scatter(np_gra, np_snip, s=1, alpha=0.3, cmap='rainbow')
+    #
+    # # 整个网络
+    # # 卷积核
+    # # gra = None
+    # # snip = None
+    # # for _layer, _key in enumerate(grad_key):
+    # #     if isinstance(_key, nn.Conv2d):
+    # #         if gra is None:
+    # #             gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3)))])
+    # #             snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3)))])
+    # #         else:
+    # #             gra = torch.cat([torch.flatten(torch.mean(grads_p[grad_key[_layer]], dim=(2, 3))), gra])
+    # #             snip = torch.cat([(-1)*torch.flatten(torch.mean(grads_s[grad_key[_layer]], dim=(2, 3))), snip])
+    # # 权重
+    # gra = torch.cat([torch.flatten(x) for x in grads.values()])
+    # snip = torch.cat([torch.flatten(x) for x in grads_s.values()])
+    #
+    # np_gra = -gra.cpu().detach().numpy()
+    # np_snip = -snip.cpu().detach().numpy()
+    # # gra_index = np.argsort(-np_gra)  # 降序
+    # # gra_len = len(np_gra)
+    # # gra_02_ind = gra_index[int(gra_len * 0.02)]
+    # # gra_05_ind = gra_index[int(gra_len * 0.05)]
+    # # gra_10_ind = gra_index[int(gra_len * 0.1)]
+    # # plt.axvline(np_gra[gra_02_ind], color='red', linestyle=':')
+    # # plt.axvline(np_gra[gra_05_ind], color='green', linestyle=':')
+    # # plt.axvline(np_gra[gra_10_ind], color='blue', linestyle=':')
+    # plt.scatter(np_gra, np_snip, s=1, alpha=0.7, color='coral')
+    # # plt.scatter(np_gra, np_snip, s=1, c=np.abs(np_gra*np_snip), cmap = plt.cm.plasma)
+    # _lim_x = np.max(np_gra) / 4
+    # __lim_x = np.min(np_gra) / 4
+    # _lim_y = np.max(np_snip) / 4
+    # __lim_y = np.min(np_snip) / 4
+    # plt.xlim([__lim_x, _lim_x])
+    # plt.ylim([__lim_y, _lim_y])
+    # plt.show()
 
     # 最后完成训练
     if train_one:

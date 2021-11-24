@@ -36,7 +36,7 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='exp123')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=5)
+    parser.add_argument('--prune_mode', type=int, default=1)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
@@ -173,8 +173,18 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     grad_w = None  # 一阶梯度 g
 
     # 10个类别，每类样本取10个
-    inputs, targets = GraSP_fetch_data(loader, num_classes, 10)
+    samples_per_class = 10
+    inputs, targets = GraSP_fetch_data(loader, num_classes, samples_per_class)
     N = inputs.shape[0]
+
+    # 不同标签组排列
+    _index = []
+    for i in range(samples_per_class):
+        _index.extend([i + j * samples_per_class for j in range(0, num_classes)])
+    inputs = inputs[_index]
+    targets = targets[_index]
+    # print(targets[:num_classes])
+
     # 把数据分为前后两个list
     din = copy.deepcopy(inputs)
     dtarget = copy.deepcopy(targets)
@@ -224,9 +234,9 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         gr_l2 = 0
         grasp_l2 = 0
         g1_g2 = 0  # for debug
-        g1_g2_list = []  # for debug
+        g1_g2_list = []  # for debug 层g1g2
         # g1_g2_sim = 0  # for debug
-        g1_g2_sim_list = []  # for debug
+        g1_g2_sim_list = []  # for debug 层相似度
         count = 0
         for layer in net.modules():
             if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
@@ -235,13 +245,15 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
                 # gr_l2 += (grad_f[count].pow(2).sum()) * lam_q    # g1 * g1 and g2 * g2
                 gr_l2 += ((grad_f[count] * masks[layer_key[count]]).pow(2).sum()) * lam_q  # g1 * g1 and g2 * g2
                 if it % 2 == 1:
-                    layer_g1g2 = (grad_f[count] * last_grad_f[count] * masks[layer_key[count]]).sum()  # g1 * g2
+                    layer_g1g2 = (grad_f[count] * last_grad_f[count]).sum()  # g1 * g2
+                    # layer_g1g2 = (grad_f[count] * last_grad_f[count] * masks[layer_key[count]]).sum()  # g1 * g2
                     g1_g2 += layer_g1g2
                     g1_g2_list.append(layer_g1g2)
                     # g1_g2_sim += (grad_f[count] * last_grad_f[count]).sum() / (grad_f[count].pow(2).sum().sqrt()*last_grad_f[count].pow(2).sum().sqrt())
-                    g1_g2_sim_list.append(layer_g1g2 / (
-                                (grad_f[count] * masks[layer_key[count]]).pow(2).sum().sqrt() * (
-                                    last_grad_f[count] * masks[layer_key[count]]).pow(2).sum().sqrt()))
+                    g1_g2_sim_list.append(layer_g1g2 / ((grad_f[count]).pow(2).sum().sqrt() * (last_grad_f[count]).pow(2).sum().sqrt()))
+                    # g1_g2_sim_list.append(layer_g1g2 / (
+                    #         (grad_f[count] * masks[layer_key[count]]).pow(2).sum().sqrt() * (
+                    #         last_grad_f[count] * masks[layer_key[count]]).pow(2).sum().sqrt()))
                 count += 1
 
         if it % 2 == 0:
@@ -529,55 +541,77 @@ def main(config):
     # pre_ratio = ratio
     mb.model.apply(weights_init)
     print("=> Applying weight initialization(%s)." % config.get('init_method', 'kaiming'))
-    masks, masks_98, first_data = Panning(mb.model, pre_ratio, trainloader, 'cuda',
-                                          num_classes=classes[config.dataset],
-                                          samples_per_class=config.samples_per_class,
-                                          num_iters=config.get('num_iters', 1),
-                                          single_data=config.single_data,
-                                          prune_mode=config.prune_mode,
-                                          prune_conv=config.prune_conv,
-                                          add_link=config.core_link,
-                                          delete_link=config.core_link,
-                                          enlarge=config.enlarge,
-                                          prune_link=config.prune_link,
-                                          # train_one=True
-                                          )
-    # 分析剪枝后同数据下的敏感情况
+    masks, masks_2, first_data = Panning(mb.model, pre_ratio, trainloader, 'cuda',
+                                         num_classes=classes[config.dataset],
+                                         samples_per_class=config.samples_per_class,
+                                         num_iters=config.get('num_iters', 1),
+                                         single_data=config.single_data,
+                                         prune_mode=config.prune_mode,
+                                         prune_conv=config.prune_conv,
+                                         add_link=config.core_link,
+                                         delete_link=config.core_link,
+                                         enlarge=config.enlarge,
+                                         prune_link=config.prune_link,
+                                         # train_one=True
+                                         )
+    # # 用于得到不同数据计算出的mask
+    # masks_2, masks__, first_data = Panning(mb.model, pre_ratio, trainloader, 'cuda',
+    #                                        num_classes=classes[config.dataset],
+    #                                        samples_per_class=config.samples_per_class,
+    #                                        num_iters=config.get('num_iters', 1),
+    #                                        reinit=False,
+    #                                        single_data=config.single_data,
+    #                                        prune_mode=config.prune_mode,
+    #                                        prune_conv=config.prune_conv,
+    #                                        add_link=config.core_link,
+    #                                        delete_link=config.core_link,
+    #                                        enlarge=config.enlarge,
+    #                                        prune_link=config.prune_link,
+    #                                        # first_data=first_data,
+    #                                        )
+    # ========== register mask ==================
+    mb.register_mask(masks)
+
+    # # 分析剪枝后同数据下的敏感情况
     # masks, _, __ = Panning(mb.model, ratio, trainloader, 'cuda',
     #                        num_classes=classes[config.dataset],
     #                        samples_per_class=config.samples_per_class,
     #                        num_iters=config.get('num_iters', 1),
     #                        reinit=False,
-    #                        prune_mode=config.prune_mode_pa,
-    #                        prune_conv=config.prune_conv_pa,
+    #                        prune_mode=config.prune_mode,
+    #                        prune_conv=config.prune_conv,
     #                        add_link=config.core_link,
     #                        delete_link=config.core_link,
     #                        enlarge=config.enlarge,
     #                        prune_link=config.prune_link,
-    #                        # first_masks=masks,
+    #                        first_masks=masks,
     #                        first_data=first_data,
-    #                        train_one=True
+    #                        # train_one=True
     #                        )
-    # 用于分析两次剪枝的筛选情况
-    # # 与95%与98%比较（筛选占比）
-    # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_98.values()]))
+    # exit()
+
+    # # 用于分析两次剪枝的筛选情况
+    # _coincidence = []
+    # _all_mask_num = torch.sum(torch.cat([torch.flatten(x == 1) for x in masks_2.values()]))
     # _and_mask_num = 0
     # for m, g in masks.items():
     #     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-    #         and_mask = masks[m] * masks_98[m]
+    #         and_mask = masks[m] * masks_2[m]
     #         _now_mask_num = torch.sum(torch.cat([torch.flatten(and_mask == 1)]))
-    #         _last_mask_num = torch.sum(torch.cat([torch.flatten(masks_98[m] == 1)]))
+    #         _last_mask_num = torch.sum(torch.cat([torch.flatten(masks_2[m] == 1)]))
     #         print('-' * 20)
     #         print(f'_now_mask_num: {_now_mask_num}')
     #         print(f'_last_mask_num: {_last_mask_num}')
     #         print(f'/: {1 - _now_mask_num / _last_mask_num}')
+    #         _coincidence.append(float(_now_mask_num / _last_mask_num))
     #         _and_mask_num += _now_mask_num
     # print(f'_all_mask_num: {_all_mask_num}')
     # print(f'_and_mask_num: {_and_mask_num}')
     # print(f'/: {1 - _and_mask_num / _all_mask_num}')
+    # print('_coincidence', _coincidence)
 
     # ========== register mask ==================
-    mb.register_mask(masks)
+    # mb.register_mask(masks)
     # ========== print pruning details ============
     print_inf = print_mask_information(mb, logger)
     config.send_mail_str += print_inf
@@ -601,7 +635,7 @@ def main(config):
                                    ratio=ratio,
                                    num_classes=classes[config.dataset],
                                    logger=logger,
-                                   last_mask=masks_98,
+                                   last_mask=masks_2,
                                    keep_masks=masks,
                                    lr_mode=config.lr_mode
                                    )
