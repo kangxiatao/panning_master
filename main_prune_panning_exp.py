@@ -45,6 +45,7 @@ def init_config():
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=0)  # 第二次修剪时间
     parser.add_argument('--single_data', type=int, default=0)  # 单次修剪的数据方式
+    parser.add_argument('--gtg_mode', type=int, default=0)  # 训练过程求解梯度的数据模式
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--lr_mode', type=str, default='cosine', help='cosine or preset')
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
@@ -70,6 +71,7 @@ def init_config():
     config.prune_epoch = args.prune_epoch
     config.single_data = args.single_data
     config.lr_mode = args.lr_mode
+    config.gtg_mode = args.gtg_mode
     config.dp = args.dp
     config.send_mail_head = (args.config + ' -> ' + args.run + '\n')
     config.send_mail_str = (mail_log.get_words() + '\n')
@@ -130,7 +132,15 @@ def save_state(net, acc, epoch, loss, config, ckpt_path, is_best=False):
                                                             config.depth))
 
 
-def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, num_classes=10,
+def l2_regularization(model, l2_alpha):
+    l2_loss = []
+    for module in model.modules():
+        if type(module) is nn.Conv2d:
+            l2_loss.append((module.weight ** 2).sum() / 2.0)
+    return l2_alpha * sum(l2_loss)
+
+
+def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iteration, lr_mode, gtg_mode=0, num_classes=10,
           masks=None):
     print('\nEpoch: %d' % epoch)
     net.train()
@@ -174,16 +184,32 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
 
     # 10个类别，每类样本取10个
     samples_per_class = 10
-    inputs, targets = GraSP_fetch_data(loader, num_classes, samples_per_class)
+    if gtg_mode == 0 or gtg_mode == 5:
+        inputs, targets = GraSP_fetch_data(loader, num_classes, samples_per_class)  # 按样本数分组，标签相等
+        # 不同标签组排列
+        _index = []
+        for i in range(samples_per_class):
+            _index.extend([i + j * samples_per_class for j in range(0, num_classes)])
+        inputs = inputs[_index]
+        targets = targets[_index]
+        # print(targets[:num_classes])
+    elif gtg_mode == 1:
+        inputs, targets = GraSP_fetch_data(loader, num_classes, samples_per_class)  # 按标签分组，等量样本
+    elif gtg_mode == 2:
+        inputs, targets = GraSP_fetch_data(loader, num_classes, samples_per_class, 1)  # 随机取100个样本
+    elif gtg_mode == 3:
+        inputs, targets = GraSP_fetch_data(loader, num_classes, 1, 1)  # 随机取10个样本
+    elif gtg_mode == 4:
+        inputs, targets = GraSP_fetch_data(loader, 2, 1, 1)  # 随机取2个样本
+    else:
+        inputs, targets = GraSP_fetch_data(loader, num_classes, samples_per_class)
     N = inputs.shape[0]
 
-    # 不同标签组排列
-    _index = []
-    for i in range(samples_per_class):
-        _index.extend([i + j * samples_per_class for j in range(0, num_classes)])
-    inputs = inputs[_index]
-    targets = targets[_index]
-    # print(targets[:num_classes])
+    # 考虑二范数的梯度
+    if gtg_mode == 5:
+        _l2_reg = l2_regularization(net, 0.0005)
+    else:
+        _l2_reg = 0
 
     # 把数据分为前后两个list
     din = copy.deepcopy(inputs)
@@ -196,12 +222,12 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
     targets = targets.cuda()
 
     outputs = net.forward(inputs[:N // 2])
-    loss = criterion(outputs, targets[:N // 2])
+    loss = criterion(outputs, targets[:N // 2]) + _l2_reg
     grad_w_p = autograd.grad(loss, weights)
     grad_w = list(grad_w_p)
 
     outputs = net.forward(inputs[N // 2:])
-    loss = criterion(outputs, targets[N // 2:])
+    loss = criterion(outputs, targets[N // 2:]) + _l2_reg
     grad_w_p = autograd.grad(loss, weights, create_graph=False)
     for idx in range(len(grad_w)):
         grad_w[idx] += grad_w_p[idx]
@@ -225,7 +251,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
         inputs = inputs_one.pop(0).cuda()
         targets = targets_one.pop(0).cuda()
         outputs = net.forward(inputs)
-        loss = criterion(outputs, targets)
+        loss = criterion(outputs, targets) + _l2_reg
 
         # torch.autograd.grad() 对指定参数求导
         # .torch.autograd.backward() 动态图所有参数的梯度都计算，叠加到 .grad 属性
