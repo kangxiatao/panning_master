@@ -491,7 +491,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
                                                                                        config.depth,
                                                                                        config.target_ratio,
                                                                                        iteration))
-            torch.save(state, path)
+            # torch.save(state, path)
             best_acc = test_acc
             best_epoch = epoch
 
