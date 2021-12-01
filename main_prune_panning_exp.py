@@ -36,7 +36,7 @@ def init_config():
     # parser.add_argument('--config', type=str, default='configs/mnist/lenet/Panning_90.json')
     parser.add_argument('--run', type=str, default='exp123')
     parser.add_argument('--epoch', type=str, default='666')
-    parser.add_argument('--prune_mode', type=int, default=1)
+    parser.add_argument('--prune_mode', type=int, default=0)
     parser.add_argument('--prune_mode_pa', type=int, default=0)  # 第二次修剪模式
     parser.add_argument('--prune_conv', type=int, default=0)  # 修剪卷积核标志
     parser.add_argument('--prune_conv_pa', type=int, default=0)
@@ -212,6 +212,7 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
             if type(module) is nn.Conv2d:
                 l2_loss.append((module.weight ** 2).sum() / 2.0)
         _l2_reg = 0.0005 * sum(l2_loss)
+        print(_l2_reg)
         # _l2_reg = l2_regularization(net, 0.0005)
     else:
         _l2_reg = 0
@@ -228,12 +229,12 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
 
     outputs = net.forward(inputs[:N // 2])
     loss = criterion(outputs, targets[:N // 2]) + _l2_reg
-    grad_w_p = autograd.grad(loss, weights)
+    grad_w_p = autograd.grad(loss, weights, retain_graph=True)
     grad_w = list(grad_w_p)
 
     outputs = net.forward(inputs[N // 2:])
     loss = criterion(outputs, targets[N // 2:]) + _l2_reg
-    grad_w_p = autograd.grad(loss, weights, create_graph=False)
+    grad_w_p = autograd.grad(loss, weights, retain_graph=True)
     for idx in range(len(grad_w)):
         grad_w[idx] += grad_w_p[idx]
 
@@ -470,7 +471,7 @@ def train_once(mb, net, trainloader, testloader, writer, config, ckpt_path, lear
             print_inf = print_mask_information(mb, logger)
 
         train(net, trainloader, optimizer, criterion, lr_scheduler, epoch, writer,
-              iteration=iteration, lr_mode=lr_mode, num_classes=num_classes, masks=keep_masks)
+              iteration=iteration, lr_mode=lr_mode, gtg_mode=config.gtg_mode, num_classes=num_classes, masks=keep_masks)
         test_acc = test(net, testloader, criterion, epoch, writer, iteration)
         if lr_mode == 'cosine':
             lr_scheduler.step()
