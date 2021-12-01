@@ -45,7 +45,7 @@ def init_config():
     parser.add_argument('--prune_link', type=int, default=0)  # 按核链修剪
     parser.add_argument('--prune_epoch', type=int, default=0)  # 第二次修剪时间
     parser.add_argument('--single_data', type=int, default=0)  # 单次修剪的数据方式
-    parser.add_argument('--gtg_mode', type=int, default=0)  # 训练过程求解梯度的数据模式
+    parser.add_argument('--gtg_mode', type=int, default=5)  # 训练过程求解梯度的模式
     parser.add_argument('--remain', type=float, default=666)
     parser.add_argument('--lr_mode', type=str, default='cosine', help='cosine or preset')
     parser.add_argument('--dp', type=str, default='../Data', help='dataset path')
@@ -207,7 +207,12 @@ def train(net, loader, optimizer, criterion, lr_scheduler, epoch, writer, iterat
 
     # 考虑二范数的梯度
     if gtg_mode == 5:
-        _l2_reg = l2_regularization(net, 0.0005)
+        l2_loss = []
+        for module in net.modules():
+            if type(module) is nn.Conv2d:
+                l2_loss.append((module.weight ** 2).sum() / 2.0)
+        _l2_reg = 0.0005 * sum(l2_loss)
+        # _l2_reg = l2_regularization(net, 0.0005)
     else:
         _l2_reg = 0
 
